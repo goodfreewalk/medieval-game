@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Средневековая стратегия</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <select id="lang">
+      <option value="ru">Русский</option>
+      <option value="en">English</option>
+    </select>
+
+    <!-- Экран меню -->
+    <div id="menuScreen">
+      <h1 id="menuTitle"></h1>
+      <div class="menuBox">
+        <input id="nickname" maxlength="16">
+        <button id="createRoomBtn"></button>
+        <div class="menuRow">
+          <input id="roomCodeInput" maxlength="4">
+          <button id="joinRoomBtn"></button>
+        </div>
+        <p id="menuStatus"></p>
+      </div>
+    </div>
+
+    <!-- Экран лобби -->
+    <div id="lobbyScreen" class="hidden">
+      <h1 id="lobbyTitle"></h1>
+      <div id="roomCodeDisplay"></div>
+      <h2 id="playersLabel"></h2>
+      <ul id="playerList"></ul>
+      <div class="menuRow">
+        <button id="readyBtn"></button>
+        <button id="startBtn"></button>
+      </div>
+      <p id="lobbyStatus"></p>
+    </div>
+
+    <!-- Экран игры -->
+    <div id="gameScreen" class="hidden">
+      <h1 id="title">Прототип карты</h1>
+
+      <div id="topBar">
+        <span id="turnInfo"></span>
+        <span id="timer"></span>
+        <button id="endTurn"></button>
+      </div>
+
+      <div id="resources"></div>
+
+      <div id="recruitPanel"></div>
+
+      <canvas id="game" width="640" height="640"></canvas>
+      <p id="info">Кликни по клетке</p>
+    </div>
+  </main>
+
+  <!-- Оверлей завершения игры -->
+  <div id="gameOverOverlay" class="hidden">
+    <div class="overlay-content">
+      <h2 id="gameOverText"></h2>
+      <p id="gameOverReason"></p>
+      <button id="playAgainBtn"></button>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
