@@ -274,3 +274,18 @@ canvas {
 #playAgainBtn:hover {
   background-color: #3860d0;
 }
+
+/* Крупный масштаб: карта не сжимается на телефоне, страница прокручивается */
+body {
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.app {
+  margin: auto;
+}
+
+canvas {
+  width: 640px;
+  max-width: none;
+}
