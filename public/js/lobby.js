@@ -126,6 +126,24 @@ export function getMyPlayerId() {
 export function initLobby(callbacks) {
   onGameStartCallback = callbacks.onGameStart;
 
+    // Интеграция с Telegram
+  if (window.Telegram && window.Telegram.WebApp) {
+    const tg = window.Telegram.WebApp;
+
+    // Сообщаем Telegram, что приложение готово, и разворачиваем на весь экран
+    tg.ready();
+    tg.expand();
+    tg.setHeaderColor("#222222");
+    tg.setBackgroundColor("#222222");
+
+    // Подставляем имя из профиля Telegram
+    const user = tg.initDataUnsafe && tg.initDataUnsafe.user;
+
+    if (user && user.first_name) {
+      nickname.value = user.first_name;
+    }
+  }
+  
   createRoomBtn.addEventListener("click", () => {
     const name = nickname.value.trim() || "Player";
     menuStatus.textContent = "";
