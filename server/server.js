@@ -7,7 +7,13 @@ const PORT = process.env.PORT || 8080;
 const app = express();
 
 // Раздаём файлы клиента из папки public
-app.use(express.static(path.join(__dirname, "..", "public")));
+app.use(
+  express.static(path.join(__dirname, "..", "public"), {
+    setHeaders: (res) => {
+      res.setHeader("Cache-Control", "no-cache");
+    }
+  })
+);
 
 // Запускаем HTTP-сервер
 const httpServer = app.listen(PORT, () => {
