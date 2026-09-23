@@ -60,12 +60,21 @@ export function getReachableTiles(unit) {
         continue;
       }
 
-      if (!isTilePassable(nextX, nextY, unit)) {
+      // Проходимость местности
+      const terrain = getTerrainAt(nextX, nextY);
+      const terrainCost = TERRAIN_COST[terrain];
+
+      if (terrainCost === Infinity) {
         continue;
       }
 
-      const terrain = getTerrainAt(nextX, nextY);
-      const terrainCost = TERRAIN_COST[terrain];
+      // Чужие юниты блокируют путь, свои — можно пройти насквозь
+      const occupant = getUnitAtTile(state.units, nextX, nextY);
+
+      if (occupant && occupant.owner !== unit.owner) {
+        continue;
+      }
+
       const newCost = current.cost + terrainCost;
 
       if (newCost > movement) {
@@ -77,11 +86,15 @@ export function getReachableTiles(unit) {
 
       if (previousCost === undefined || newCost < previousCost) {
         bestCost.set(key, newCost);
-        reachable.set(key, {
-          x: nextX,
-          y: nextY,
-          cost: newCost
-        });
+
+        // Остановиться на своей клетке нельзя, пройти — можно
+        if (!occupant) {
+          reachable.set(key, {
+            x: nextX,
+            y: nextY,
+            cost: newCost
+          });
+        }
 
         queue.push({
           x: nextX,
@@ -429,10 +442,8 @@ export function getTileFromClick(event) {
   const canvasX = (event.clientX - rect.left) * scaleX;
   const canvasY = (event.clientY - rect.top) * scaleY;
 
-  const tileSize = state.tileSize;
-
-  const x = Math.floor(canvasX / tileSize);
-  const y = Math.floor(canvasY / tileSize);
+  const x = Math.floor(canvasX / state.tileSize);
+  const y = Math.floor(canvasY / state.tileSize);
 
   if (x < 0 || x >= MAP_SIZE || y < 0 || y >= MAP_SIZE) {
     return null;

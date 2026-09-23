@@ -16,6 +16,7 @@ export const state = {
   players: {},
   gameOver: false,
   winner: null
+  
 };
 
 export function tileKey(x, y) {
@@ -239,3 +240,9 @@ export function getSupplyUsed(owner) {
 export function collectIncome(owner) {
   state.players[owner].gold += getIncome(owner);
 }
+
+// Pan и zoom для мобильной карты
+  // Эти поля добавляются в state после его определения:
+  state.panX = 0;
+  state.panY = 0;
+  state.zoom = 1;

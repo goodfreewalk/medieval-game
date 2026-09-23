@@ -34,374 +34,75 @@ import {
   getTileFromClick
 } from "./logic.js";
 
+// --- Элементы DOM ---
+
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const info = document.getElementById("info");
-const title = document.getElementById("title");
-const langSelect = document.getElementById("lang");
 const turnInfo = document.getElementById("turnInfo");
+const timerElement = document.getElementById("timer");
 const endTurnButton = document.getElementById("endTurn");
-const resources = document.getElementById("resources");
+const resourcesElement = document.getElementById("resources");
 const recruitPanel = document.getElementById("recruitPanel");
+const langSelect = document.getElementById("lang");
 const gameOverOverlay = document.getElementById("gameOverOverlay");
-const gameOverText = document.getElementById("gameOverText");
-const playAgainBtn = document.getElementById("playAgainBtn");
-const timerEl = document.getElementById("timer");
+const gameOverReason = document.getElementById("gameOverReason");
+const playAgainButton = document.getElementById("playAgainBtn");
 
-// Таймер хода
+// --- Таймер хода ---
+
 const TURN_TIME = 60;
-let turnTimer = null;
+let timerInterval = null;
 let timeLeft = TURN_TIME;
 
-initGame(canvas, ctx);
+// --- Вспомогательные функции ---
 
-// Мой ход или нет
 function isMyTurn() {
   return state.currentPlayer === getMyPlayerId();
 }
-
-// --- Таймер ---
-
-function updateTimerDisplay() {
-  timerEl.textContent = `${timeLeft}`;
-
-  if (timeLeft <= 10) {
-    timerEl.classList.add("warning");
-  } else {
-    timerEl.classList.remove("warning");
-  }
-}
-
-function stopTurnTimer() {
-  if (turnTimer) {
-    clearInterval(turnTimer);
-    turnTimer = null;
-  }
-}
-
-function startTurnTimer() {
-  stopTurnTimer();
-  timeLeft = TURN_TIME;
-  updateTimerDisplay();
-
-  turnTimer = setInterval(() => {
-    timeLeft--;
-    updateTimerDisplay();
-
-    if (timeLeft <= 0) {
-      // Ход автоматически завершает только тот, чей сейчас ход
-      if (isMyTurn()) {
-        doEndTurn();
-      }
-    }
-  }, 1000);
-}
-
-// --- Обновление интерфейса ---
-
-function updateInfo() {
-  if (state.selectedUnit) {
-    const unit = state.selectedUnit;
-    const maxMovement = UNIT_TYPES[unit.type].movement;
-
-    let text =
-      `${t("unitLabel")}: ${unitName(unit.type)} | ` +
-      `${t("player")}: ${unit.owner} | ` +
-      `${t("health")}: ${unit.hp} | ` +
-      `${t("movement")}: ${unit.movementLeft}`;
-
-    if (unit.owner === state.currentPlayer) {
-      if (unit.hasAttacked) {
-        text += ` | ${t("acted")}`;
-      } else if (unit.movementLeft < maxMovement) {
-        text += ` | ${t("moved")}`;
-      } else {
-        text += ` | ${t("ready")}`;
-      }
-    }
-
-    info.textContent = text;
-    return;
-  }
-
-  if (state.selectedTile) {
-    const terrain = state.map[state.selectedTile.y][state.selectedTile.x];
-    const terrainDef = TERRAIN_DEFENSE[terrain] || 0;
-    const terrainCost = TERRAIN_COST[terrain];
-    const isPassable = terrainCost !== Infinity;
-
-    let text =
-      `${t("cell")}: ${state.selectedTile.x}, ${state.selectedTile.y} | ` +
-      `${t("type")}: ${terrainName(terrain)}`;
-
-    if (!isPassable) {
-      text += ` | ${t("moveCost")}: ∞`;
-    } else {
-      text += ` | ${t("moveCost")}: ${terrainCost}`;
-    }
-
-    if (terrainDef > 0) {
-      text += ` | ${t("defenseBonus")}: +${terrainDef}`;
-    }
-
-    if (terrain === TERRAIN.VILLAGE || terrain === TERRAIN.CASTLE) {
-      const owner = getTileOwner(state.selectedTile.x, state.selectedTile.y);
-      const isCastle = terrain === TERRAIN.CASTLE;
-
-      const gold = isCastle ? 6 : 2;
-      const supply = isCastle ? 3 : 1;
-
-      text += ` | ${t("gold")}: +${gold} | ${t("supply")}: +${supply}`;
-
-      if (owner === 0) {
-        text += ` | ${t("player")}: —`;
-      } else {
-        text += ` | ${t("player")}: ${owner}`;
-      }
-    }
-
-    info.textContent = text;
-    return;
-  }
-
-  info.textContent = t("infoDefault");
-}
-
-function updateTurnInfo() {
-  turnInfo.textContent = `${t("currentPlayer")}: ${state.currentPlayer}`;
-  turnInfo.style.backgroundColor = PLAYER_COLORS[state.currentPlayer];
-  endTurnButton.textContent = t("endTurn");
-  endTurnButton.disabled = !isMyTurn();
-}
-
-function updateResourceInfo() {
-  const player = state.currentPlayer;
-
-  const gold = getPlayerGold(player);
-  const income = getIncome(player);
-  const supplyUsed = getSupplyUsed(player);
-  const supplyCapacity = getSupplyCapacity(player);
-
-  resources.textContent =
-    `${t("gold")}: ${gold} | ` +
-    `${t("income")}: +${income} | ` +
-    `${t("supply")}: ${supplyUsed}/${supplyCapacity}`;
-}
-
-function updateRecruitPanel() {
-  recruitPanel.innerHTML = "";
-
-  if (state.gameOver) {
-    return;
-  }
-
-  if (!isMyTurn()) {
-    return;
-  }
-
-  if (!state.selectedTile) {
-    return;
-  }
-
-  const tile = state.selectedTile;
-  const terrain = state.map[tile.y][tile.x];
-
-  if (terrain !== TERRAIN.CASTLE && terrain !== TERRAIN.VILLAGE) {
-    return;
-  }
-
-  const owner = getTileOwner(tile.x, tile.y);
-
-  if (owner !== state.currentPlayer) {
-    return;
-  }
-
-  if (getUnitAtTile(state.units, tile.x, tile.y)) {
-    return;
-  }
-
-  const player = state.currentPlayer;
-  const gold = getPlayerGold(player);
-  const supplyUsed = getSupplyUsed(player);
-  const supplyCapacity = getSupplyCapacity(player);
-  const supplyFull = supplyUsed >= supplyCapacity;
-
-  let recruitableTypes;
-  if (terrain === TERRAIN.CASTLE) {
-    recruitableTypes = Object.keys(UNIT_TYPES);
-  } else {
-    recruitableTypes = ["militia"];
-  }
-
-  for (const type of recruitableTypes) {
-    const unitType = UNIT_TYPES[type];
-
-    const button = document.createElement("button");
-    button.className = "recruitButton";
-    button.textContent = `${unitName(type)} (${unitType.cost})`;
-
-    button.disabled = gold < unitType.cost || supplyFull;
-
-    button.addEventListener("click", () => {
-      const action = {
-        kind: "recruit",
-        unitType: type,
-        x: tile.x,
-        y: tile.y
-      };
-
-      if (runAction(action)) {
-        sendAction(action);
-      }
-    });
-
-    recruitPanel.appendChild(button);
-  }
-}
-
-function showGameOver() {
-  if (!state.gameOver) {
-    return;
-  }
-
-  stopTurnTimer();
-
-  gameOverOverlay.classList.remove("hidden");
-
-  if (state.winner === null) {
-    gameOverText.textContent = t("draw");
-  } else {
-    gameOverText.textContent =
-      `${t("player")} ${state.winner} ${t("wins")}`;
-  }
-
-  playAgainBtn.textContent = t("playAgain");
-}
-
-function applyLanguage() {
-  langSelect.value = getLanguage();
-  title.textContent = t("title");
-
-  refreshGame();
-
-  if (state.gameOver) {
-    showGameOver();
-  }
-}
-
-// Полное обновление игрового интерфейса
-function refreshGame() {
-  updateTurnInfo();
-  updateResourceInfo();
-  updateInfo();
-  updateRecruitPanel();
-  drawGame();
-}
-
-// --- Действия ---
 
 function sendAction(action) {
   sendMessage({ type: "gameAction", action });
 }
 
-// Применяет действие (и своё, и чужое)
-function runAction(action) {
-  if (action.kind === "move") {
-    const result = applyMove(action.unitId, action.x, action.y);
+// --- Обновление интерфейса ---
 
-    if (!result.success) {
-      return false;
-    }
-
-    const unit = state.units.find(u => u.id === action.unitId);
-
-    state.selectedUnit = unit || null;
-    state.selectedTile = { x: action.x, y: action.y };
-
-    updateSelectionHighlights();
-    refreshGame();
-    return true;
-  }
-
-  if (action.kind === "attack") {
-    const result = applyAttack(action.attackerId, action.targetId);
-
-    if (!result.success) {
-      return false;
-    }
-
-    const attacker = state.units.find(u => u.id === action.attackerId);
-
-    if (attacker) {
-      state.selectedUnit = attacker;
-      state.selectedTile = { x: attacker.x, y: attacker.y };
-    } else {
-      state.selectedUnit = null;
-      state.selectedTile = null;
-    }
-
-    updateSelectionHighlights();
-
-    let text = `${t("damage")}: ${result.damageToDefender}`;
-
-    if (result.damageToAttacker > 0) {
-      text += ` | ${t("counter")}: ${result.damageToAttacker}`;
-    }
-
-    if (result.defenderDestroyed) {
-      text += ` | ${t("defenderLost")}`;
-    }
-
-    if (result.attackerDestroyed) {
-      text += ` | ${t("attackerLost")}`;
-    }
-
-    info.textContent = text;
-
-    refreshGame();
-
-    if (state.gameOver) {
-      showGameOver();
-    }
-
-    return true;
-  }
-
-  if (action.kind === "recruit") {
-    const result = applyRecruit(action.unitType, action.x, action.y);
-
-    if (!result.success) {
-      return false;
-    }
-
-    info.textContent = t("recruited");
-
-    state.selectedUnit = null;
-    state.selectedTile = { x: action.x, y: action.y };
-
-    refreshGame();
-    return true;
-  }
-
-  if (action.kind === "endTurn") {
-    applyEndTurn();
-
-    refreshGame();
-
-    if (state.gameOver) {
-      showGameOver();
-    } else {
-      startTurnTimer();
-    }
-
-    return true;
-  }
-
-  return false;
+function updateTurnInfo() {
+  turnInfo.textContent = `${t("turn")}: ${state.currentPlayer}`;
+  endTurnButton.disabled = !isMyTurn() || state.gameOver;
 }
 
-// Завершение хода
-function doEndTurn() {
+function updateTimerDisplay() {
+  timerElement.textContent = timeLeft;
+  timerElement.classList.toggle("warning", timeLeft <= 10);
+}
+
+function stopTurnTimer() {
+  if (timerInterval !== null) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+}
+
+function startTurnTimer() {
+  stopTurnTimer();
+
+  timeLeft = TURN_TIME;
+  updateTimerDisplay();
+
+  timerInterval = setInterval(() => {
+    timeLeft -= 1;
+    updateTimerDisplay();
+
+    if (timeLeft <= 0) {
+      stopTurnTimer();
+      autoEndTurn();
+    }
+  }, 1000);
+}
+
+// Автозавершение хода: только у того, чей сейчас ход
+function autoEndTurn() {
   if (state.gameOver) {
     return;
   }
@@ -417,27 +118,467 @@ function doEndTurn() {
   }
 }
 
-// Получаем сообщения от сервера
-onNetworkMessage((message) => {
-  if (message.type === "gameAction") {
-    runAction(message.action);
+function updateResources() {
+  const player = getMyPlayerId();
+
+  resourcesElement.textContent =
+    `${t("gold")}: ${getPlayerGold(player)} | ` +
+    `${t("income")}: +${getIncome(player)} | ` +
+    `${t("supply")}: ${getSupplyUsed(player)}/${getSupplyCapacity(player)}`;
+}
+
+function updateInfo() {
+  // Выбран юнит
+  if (state.selectedUnit) {
+    const unit = state.selectedUnit;
+    const type = UNIT_TYPES[unit.type];
+
+    let text =
+      `${unitName(unit.type)} | ` +
+      `${t("player")}: ${unit.owner} | ` +
+      `❤️ ${unit.hp}`;
+
+    text += ` | ⚔️ ${type.attack} | 🛡️ ${type.defense} | 👣 ${type.movement}`;
+
+    if (unit.owner === state.currentPlayer) {
+      if (unit.hasAttacked) {
+        text += ` | ${t("acted")}`;
+      } else if (unit.movementLeft < type.movement) {
+        text += ` | ${t("moved")}`;
+      } else {
+        text += ` | ${t("ready")}`;
+      }
+    }
+
+    info.textContent = text;
+    return;
   }
 
-  // Противник отключился во время игры
-  if (message.type === "opponentLeft") {
-    state.gameOver = true;
-    state.winner = getMyPlayerId();
+  // Выбрана клетка
+  if (state.selectedTile) {
+    const terrain = state.map[state.selectedTile.y][state.selectedTile.x];
+    const terrainDef = TERRAIN_DEFENSE[terrain] || 0;
+    const terrainCost = TERRAIN_COST[terrain];
+    const isPassable = terrainCost !== Infinity;
 
-    document.getElementById("gameOverReason").textContent =
-      t("opponentLeft");
+    let text = terrainName(terrain);
 
+    if (!isPassable) {
+      text += ` | 👣 `;
+    } else {
+      text += ` | 👣 ${terrainCost}`;
+    }
+
+    if (terrainDef > 0) {
+      text += ` | 🛡️ +${terrainDef}`;
+    }
+
+    if (terrain === TERRAIN.VILLAGE || terrain === TERRAIN.CASTLE) {
+      const owner = getTileOwner(state.selectedTile.x, state.selectedTile.y);
+      const isCastle = terrain === TERRAIN.CASTLE;
+
+      const gold = isCastle ? 6 : 2;
+      const supply = isCastle ? 3 : 1;
+
+      text += ` | 💰 +${gold} | 📦 +${supply}`;
+
+      if (owner !== 0) {
+        text += ` | 🚩 ${owner}`;
+      }
+    }
+
+    info.textContent = text;
+    return;
+  }
+
+  info.textContent = t("infoDefault");
+}
+
+function updateRecruitPanel() {
+  recruitPanel.innerHTML = "";
+
+  if (!state.selectedTile || state.gameOver) {
+    return;
+  }
+
+  const tile = state.selectedTile;
+  const terrain = state.map[tile.y][tile.x];
+
+  if (terrain !== TERRAIN.CASTLE && terrain !== TERRAIN.VILLAGE) {
+    return;
+  }
+
+  const owner = getTileOwner(tile.x, tile.y);
+
+  if (owner !== getMyPlayerId()) {
+    return;
+  }
+
+  if (!isMyTurn()) {
+    return;
+  }
+
+  if (getUnitAtTile(state.units, tile.x, tile.y)) {
+    return;
+  }
+
+  // Значки юнитов
+  const icons = {
+    militia: "🪓",
+    archer: "🏹",
+    swordsman: "⚔️",
+    lightCavalry: "🏇",
+    heavyCavalry: "🏇️",
+    horseArcher: "🏇🏹"
+  };
+
+  const types = terrain === TERRAIN.VILLAGE
+    ? ["militia"]
+    : Object.keys(UNIT_TYPES);
+
+  for (const type of types) {
+    const stats = UNIT_TYPES[type];
+
+    // Одна строка: кнопка найма + характеристики
+    const row = document.createElement("div");
+    row.className = "recruitRow";
+
+    const button = document.createElement("button");
+    button.className = "recruitButton";
+    button.textContent = `${icons[type]} ${unitName(type)} 💰 ${stats.cost}`;
+
+    const supplyFull =
+      getSupplyUsed(getMyPlayerId()) >= getSupplyCapacity(getMyPlayerId());
+    const noGold = getPlayerGold(getMyPlayerId()) < stats.cost;
+
+    if (noGold || supplyFull) {
+      button.disabled = true;
+    }
+
+    button.addEventListener("click", () => {
+      const action = {
+        kind: "recruit",
+        type,
+        x: tile.x,
+        y: tile.y
+      };
+
+      if (runAction(action)) {
+        sendAction(action);
+      }
+    });
+
+    const statsText = document.createElement("span");
+    statsText.className = "recruitStats";
+    statsText.textContent =
+      `| ⚔️ ${stats.attack} | 🛡️ ${stats.defense} | 👣 ${stats.movement}`;
+
+    row.appendChild(button);
+    row.appendChild(statsText);
+    recruitPanel.appendChild(row);
+  }
+}
+
+function refreshGame() {
+  updateTurnInfo();
+  updateResources();
+  updateRecruitPanel();
+  updateInfo();
+  drawGame();
+}
+
+function applyLanguage() {
+  langSelect.value = getLanguage();
+
+  endTurnButton.textContent = t("endTurn");
+  playAgainButton.textContent = t("playAgain");
+
+  refreshGame();
+
+  if (state.gameOver) {
     showGameOver();
+  }
+}
+
+function showGameOver() {
+  stopTurnTimer();
+  gameOverOverlay.classList.remove("hidden");
+
+  if (state.winner === null) {
+    gameOverReason.textContent = t("draw");
+  } else if (state.winner === getMyPlayerId()) {
+    gameOverReason.textContent = t("victory");
+  } else {
+    gameOverReason.textContent = t("defeat");
+  }
+}
+
+// --- Выполнение действий (локально и от соперника) ---
+
+function runAction(action) {
+  // Передвижение юнита
+  if (action.kind === "move") {
+    const result = applyMove(action.unitId, action.x, action.y);
+
+    if (result.success) {
+      updateSelectionHighlights();
+      refreshGame();
+    }
+
+    return result.success;
+  }
+
+  // Атака
+  if (action.kind === "attack") {
+    const result = applyAttack(action.attackerId, action.targetId);
+
+    if (result.success) {
+      updateSelectionHighlights();
+      refreshGame();
+
+      if (state.gameOver) {
+        showGameOver();
+      }
+    }
+
+    return result.success;
+  }
+
+  // Найм юнита
+  if (action.kind === "recruit") {
+    const result = applyRecruit(action.type, action.x, action.y);
+
+    if (result.success) {
+      refreshGame();
+
+      if (state.gameOver) {
+        showGameOver();
+      }
+    }
+
+    return result.success;
+  }
+
+  // Завершение хода
+  if (action.kind === "endTurn") {
+    applyEndTurn();
+
+    updateSelectionHighlights();
+    refreshGame();
+
+    if (state.gameOver) {
+      showGameOver();
+      return true;
+    }
+
+    startTurnTimer();
+    return true;
+  }
+
+  return false;
+}
+
+// --- Камера: pan и масштаб ----------
+
+const gameContainer = document.getElementById("gameContainer");
+
+let fitZoom = 1;
+let minZoom = 0.5;
+let maxZoom = 3;
+
+function applyCanvasTransform() {
+  canvas.style.transform =
+    `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
+}
+
+function clampPan() {
+  const rect = gameContainer.getBoundingClientRect();
+  const scaledW = canvas.width * state.zoom;
+  const scaledH = canvas.height * state.zoom;
+
+  const minX = Math.min(0, rect.width - scaledW);
+  const maxX = Math.max(0, rect.width - scaledW);
+  const minY = Math.min(0, rect.height - scaledH);
+  const maxY = Math.max(0, rect.height - scaledH);
+
+  state.panX = Math.max(minX, Math.min(maxX, state.panX));
+  state.panY = Math.max(minY, Math.min(maxY, state.panY));
+}
+
+// Подгоняем камеру под размер контейнера
+function initCamera() {
+  const rect = gameContainer.getBoundingClientRect();
+
+  if (rect.width === 0 || rect.height === 0) {
+    return;
+  }
+
+  fitZoom = Math.min(
+    rect.width / canvas.width,
+    rect.height / canvas.height
+  );
+  minZoom = fitZoom;
+  maxZoom = fitZoom * 2;
+
+  state.zoom = fitZoom;
+  state.panX = (rect.width - canvas.width * state.zoom) / 2;
+  state.panY = (rect.height - canvas.height * state.zoom) / 2;
+
+  clampPan();
+  applyCanvasTransform();
+}
+
+window.addEventListener("resize", () => {
+  initCamera();
+});
+
+// ---------- Жесты и мышь ----------
+
+let isDragging = false;
+let dragMoved = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let dragStartPanX = 0;
+let dragStartPanY = 0;
+let pinchStartDist = 0;
+let pinchStartZoom = 1;
+
+function getTouchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+// Масштаб с центром в точке (localX, localY)
+function zoomAt(localX, localY, newZoom) {
+  const worldX = (localX - state.panX) / state.zoom;
+  const worldY = (localY - state.panY) / state.zoom;
+
+  state.zoom = Math.max(minZoom, Math.min(maxZoom, newZoom));
+
+  state.panX = localX - worldX * state.zoom;
+  state.panY = localY - worldY * state.zoom;
+
+  clampPan();
+  applyCanvasTransform();
+}
+
+// --- Сенсорные жесты (телефон) ---
+
+gameContainer.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 1) {
+    isDragging = true;
+    dragMoved = false;
+    dragStartX = e.touches[0].clientX;
+    dragStartY = e.touches[0].clientY;
+    dragStartPanX = state.panX;
+    dragStartPanY = state.panY;
+  } else if (e.touches.length === 2) {
+    isDragging = false;
+    pinchStartDist = getTouchDistance(e.touches);
+    pinchStartZoom = state.zoom;
+  }
+}, { passive: true });
+
+gameContainer.addEventListener("touchmove", (e) => {
+  if (e.touches.length === 1 && isDragging) {
+    const dx = e.touches[0].clientX - dragStartX;
+    const dy = e.touches[0].clientY - dragStartY;
+
+    if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+      dragMoved = true;
+    }
+
+    state.panX = dragStartPanX + dx;
+    state.panY = dragStartPanY + dy;
+
+    clampPan();
+    applyCanvasTransform();
+    e.preventDefault();
+  } else if (e.touches.length === 2) {
+    const dist = getTouchDistance(e.touches);
+    const rect = gameContainer.getBoundingClientRect();
+    const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+    const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+
+    zoomAt(cx, cy, pinchStartZoom * (dist / pinchStartDist));
+    e.preventDefault();
+  }
+}, { passive: false });
+
+gameContainer.addEventListener("touchend", (e) => {
+  if (e.touches.length === 0) {
+    isDragging = false;
+  } else if (e.touches.length === 1) {
+    isDragging = true;
+    dragStartX = e.touches[0].clientX;
+    dragStartY = e.touches[0].clientY;
+    dragStartPanX = state.panX;
+    dragStartPanY = state.panY;
   }
 });
 
-// --- Обработчики ---
+// --- Мышь: перетаскивание левой кнопкой (компьютер) ---
+
+gameContainer.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) {
+    return;
+  }
+
+  isDragging = true;
+  dragMoved = false;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  dragStartPanX = state.panX;
+  dragStartPanY = state.panY;
+});
+
+window.addEventListener("mousemove", (e) => {
+  if (!isDragging) {
+    return;
+  }
+
+  const dx = e.clientX - dragStartX;
+  const dy = e.clientY - dragStartY;
+
+  if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+    dragMoved = true;
+  }
+
+  state.panX = dragStartPanX + dx;
+  state.panY = dragStartPanY + dy;
+
+  clampPan();
+  applyCanvasTransform();
+});
+
+window.addEventListener("mouseup", () => {
+  isDragging = false;
+});
+
+// --- Колёсико мыши: масштаб (компьютер) ---
+
+gameContainer.addEventListener("wheel", (e) => {
+  e.preventDefault();
+
+  const rect = gameContainer.getBoundingClientRect();
+  const localX = e.clientX - rect.left;
+  const localY = e.clientY - rect.top;
+
+  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+
+  zoomAt(localX, localY, state.zoom * factor);
+}, { passive: false });
+
+// ---------- Клик по карте ----------
 
 canvas.addEventListener("click", (event) => {
+  // Если было перетаскивание — это не клик
+  if (dragMoved) {
+    dragMoved = false;
+    return;
+  }
+
   if (state.gameOver) {
     return;
   }
@@ -516,28 +657,49 @@ canvas.addEventListener("click", (event) => {
   drawGame();
 });
 
-endTurnButton.addEventListener("click", doEndTurn);
+// --- Кнопка завершения хода ---
 
-playAgainBtn.addEventListener("click", () => {
-  location.reload();
+endTurnButton.addEventListener("click", () => {
+  if (!isMyTurn() || state.gameOver) {
+    return;
+  }
+
+  const action = { kind: "endTurn" };
+
+  if (runAction(action)) {
+    sendAction(action);
+  }
 });
+
+// --- Смена языка ---
 
 langSelect.addEventListener("change", () => {
   setLanguage(langSelect.value);
   applyLanguage();
 });
 
-// --- Лобби и старт игры ---
+// --- Сыграть ещё раз ---
+
+playAgainButton.addEventListener("click", () => {
+  location.reload();
+});
+
+// --- Сеть: действия от соперника ---
+
+onNetworkMessage((message) => {
+  if (message.type === "gameAction") {
+    runAction(message.action);
+  }
+});
+
+// --- Старт лобби ---
 
 initLobby({
   onGameStart: () => {
     showScreen("gameScreen");
+    initCamera();
     initGame(canvas, ctx);
     applyLanguage();
     startTurnTimer();
   }
 });
-
-// --- Запуск ---
-
-applyLanguage();
