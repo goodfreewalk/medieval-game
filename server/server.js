@@ -22,12 +22,24 @@ const httpServer = app.listen(PORT, () => {
 });
 
 // WebSocket на том же сервере и порту
-const wss = new WebSocketServer({ server: httpServer });
+// maxPayload: сообщения у нас крошечные — защита от мусора и флуда
+const wss = new WebSocketServer({
+  server: httpServer,
+  maxPayload: 16 * 1024
+});
 
 console.log("WebSocket готов");
 
-// Список комнат: код комнаты -> { players: [...], phase: "lobby" | "game" }
+// Список комнат: код комнаты -> { players, phase, turn }
 const rooms = new Map();
+
+function getRoom(ws) {
+  if (!ws.roomCode) {
+    return null;
+  }
+
+  return rooms.get(ws.roomCode) || null;
+}
 
 // Генерируем короткий код комнаты, например "K7QF"
 function generateRoomCode() {
@@ -38,11 +50,7 @@ function generateRoomCode() {
     code += chars[Math.floor(Math.random() * chars.length)];
   }
 
-  if (rooms.has(code)) {
-    return generateRoomCode();
-  }
-
-  return code;
+  return rooms.has(code) ? generateRoomCode() : code;
 }
 
 // Отправляем сообщение всем игрокам комнаты
@@ -68,26 +76,56 @@ function sendRoomUpdate(room) {
   });
 }
 
+// Heartbeat: прокси и провайдеры часто рвут «простаивающие» соединения.
+// Раз в 30 секунд пингуем всех и обрываем мёртвые сокеты.
+const heartbeatInterval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (!ws.isAlive) {
+      ws.terminate();
+      continue;
+    }
+
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, 30000);
+
+wss.on("close", () => {
+  clearInterval(heartbeatInterval);
+});
+
 wss.on("connection", (ws) => {
   console.log("Игрок подключился");
 
   ws.roomCode = null;
   ws.playerId = null;
+  ws.isAlive = true;
+
+  ws.on("pong", () => {
+    ws.isAlive = true;
+  });
 
   ws.on("message", (data) => {
-    const message = JSON.parse(data.toString());
+    // Некорректный JSON больше не роняет весь сервер
+    let message;
+
+    try {
+      message = JSON.parse(data.toString());
+    } catch {
+      return;
+    }
 
     // Создание комнаты
     if (message.type === "createRoom") {
       const code = generateRoomCode();
-      const room = { players: [], phase: "lobby" };
+      const room = { players: [], phase: "lobby", turn: 1 };
 
       rooms.set(code, room);
 
       room.players.push({
         ws,
         id: 1,
-        name: message.name || "Игрок 1",
+        name: String(message.name || "Игрок 1").slice(0, 24),
         ready: false
       });
 
@@ -105,6 +143,7 @@ wss.on("connection", (ws) => {
       sendRoomUpdate(room);
 
       console.log(`Создана комната ${code}`);
+      return;
     }
 
     // Подключение к комнате
@@ -124,7 +163,7 @@ wss.on("connection", (ws) => {
       room.players.push({
         ws,
         id: 2,
-        name: message.name || "Игрок 2",
+        name: String(message.name || "Игрок 2").slice(0, 24),
         ready: false
       });
 
@@ -142,15 +181,17 @@ wss.on("connection", (ws) => {
       sendRoomUpdate(room);
 
       console.log(`Игрок зашёл в комнату ${message.roomCode}`);
+      return;
     }
 
     // Готовность игрока
     if (message.type === "setReady") {
-      if (!ws.roomCode) {
+      const room = getRoom(ws);
+
+      if (!room) {
         return;
       }
 
-      const room = rooms.get(ws.roomCode);
       const player = room.players.find(p => p.ws === ws);
 
       if (!player) {
@@ -160,15 +201,16 @@ wss.on("connection", (ws) => {
       player.ready = !!message.ready;
 
       sendRoomUpdate(room);
+      return;
     }
 
     // Старт игры (только хост, только когда все готовы)
     if (message.type === "startGame") {
-      if (!ws.roomCode) {
+      const room = getRoom(ws);
+
+      if (!room) {
         return;
       }
-
-      const room = rooms.get(ws.roomCode);
 
       if (ws.playerId !== 1) {
         return;
@@ -183,21 +225,29 @@ wss.on("connection", (ws) => {
       }
 
       room.phase = "game";
+      room.turn = 1;
 
       broadcastToRoom(room, { type: "gameStart" });
 
       console.log(`Игра началась в комнате ${ws.roomCode}`);
+      return;
     }
 
     // Пересылка игровых действий второму игроку
     if (message.type === "gameAction") {
-      if (!ws.roomCode) {
+      const room = getRoom(ws);
+
+      if (!room) {
         return;
       }
 
-      const room = rooms.get(ws.roomCode);
+      // Действия принимаем только во время игры...
+      if (room.phase !== "game") {
+        return;
+      }
 
-      if (!room) {
+      // ...и только от игрока, чей сейчас ход
+      if (ws.playerId !== room.turn) {
         return;
       }
 
@@ -208,6 +258,12 @@ wss.on("connection", (ws) => {
           player.ws.send(text);
         }
       }
+
+      // Ход переключается только по корректному endTurn
+      if (message.action && message.action.kind === "endTurn") {
+        room.turn = room.turn === 1 ? 2 : 1;
+      }
+      return;
     }
   });
 
@@ -215,11 +271,14 @@ wss.on("connection", (ws) => {
   ws.on("close", () => {
     console.log("Игрок отключился");
 
-    if (!ws.roomCode) {
+    const code = ws.roomCode;
+    ws.roomCode = null;
+
+    if (!code) {
       return;
     }
 
-    const room = rooms.get(ws.roomCode);
+    const room = rooms.get(code);
 
     if (!room) {
       return;
@@ -236,19 +295,17 @@ wss.on("connection", (ws) => {
       }
     } else {
       // Если были в лобби — комната закрывается
-      const code = ws.playerId === 1 ? "hostLeft" : "playerLeft";
+      const leftCode = ws.playerId === 1 ? "hostLeft" : "playerLeft";
 
       for (const player of remaining) {
         if (player.ws.readyState === 1) {
-          player.ws.send(JSON.stringify({ type: "roomClosed", code }));
+          player.ws.send(JSON.stringify({ type: "roomClosed", code: leftCode }));
         }
       }
     }
 
-    rooms.delete(ws.roomCode);
+    rooms.delete(code);
 
-    console.log(`Комната ${ws.roomCode} закрыта из-за отключения`);
-
-    ws.roomCode = null;
+    console.log(`Комната ${code} закрыта из-за отключения`);
   });
 });

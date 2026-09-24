@@ -4,9 +4,17 @@ const SERVER_URL = `${protocol}//${location.host}`;
 
 let socket = null;
 const messageHandlers = [];
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 5;
 
 export function onNetworkMessage(handler) {
   messageHandlers.push(handler);
+}
+
+function dispatch(message) {
+  for (const handler of messageHandlers) {
+    handler(message);
+  }
 }
 
 function connectToServer() {
@@ -14,22 +22,35 @@ function connectToServer() {
 
   socket.onopen = () => {
     console.log("Подключено к серверу");
+    reconnectAttempts = 0;
   };
 
   socket.onmessage = (event) => {
-    const message = JSON.parse(event.data);
+    // Некорректное сообщение не должно ломать обработку
+    let message;
 
-    for (const handler of messageHandlers) {
-      handler(message);
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
     }
+
+    dispatch(message);
   };
 
   socket.onclose = () => {
     console.log("Соединение закрыто");
-    
-    // Если соединение закрыто не нами — уведомляем об выходе соперника
-    for (const handler of messageHandlers) {
-      handler({ type: "opponentLeft" });
+
+    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      reconnectAttempts += 1;
+      const delay = Math.min(5000, 500 * reconnectAttempts);
+
+      dispatch({ type: "reconnecting", attempt: reconnectAttempts });
+
+      setTimeout(connectToServer, delay);
+    } else {
+      // Сдаёмся: сообщаем интерфейсу, что соединение потеряно
+      dispatch({ type: "connectionLost" });
     }
   };
 

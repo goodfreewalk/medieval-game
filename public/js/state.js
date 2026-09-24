@@ -15,8 +15,11 @@ export const state = {
   owners: new Map(),
   players: {},
   gameOver: false,
-  winner: null
-  
+  winner: null,
+  // ФИКС: поля камеры перенесены сюда из «хвоста» файла
+  panX: 0,
+  panY: 0,
+  zoom: 1
 };
 
 export function tileKey(x, y) {
@@ -137,6 +140,11 @@ export function initGame(canvas, ctx) {
   state.selectedUnit = null;
   state.reachableTiles = new Map();
   state.attackableTiles = new Map();
+
+  // ФИКС: симметрия первого хода — оба игрока получают доход
+  // до старта (иначе игрок 2 ходил с +10 золота, а игрок 1 без)
+  collectIncome(1);
+  collectIncome(2);
 }
 
 export function getTerrainAt(x, y) {
@@ -240,9 +248,3 @@ export function getSupplyUsed(owner) {
 export function collectIncome(owner) {
   state.players[owner].gold += getIncome(owner);
 }
-
-// Pan и zoom для мобильной карты
-  // Эти поля добавляются в state после его определения:
-  state.panX = 0;
-  state.panY = 0;
-  state.zoom = 1;

@@ -45,6 +45,7 @@ const resourcesElement = document.getElementById("resources");
 const recruitPanel = document.getElementById("recruitPanel");
 const langSelect = document.getElementById("lang");
 const gameOverOverlay = document.getElementById("gameOverOverlay");
+const gameOverText = document.getElementById("gameOverText");
 const gameOverReason = document.getElementById("gameOverReason");
 const playAgainButton = document.getElementById("playAgainBtn");
 
@@ -66,8 +67,12 @@ function sendAction(action) {
 
 // --- Обновление интерфейса ---
 
+// ФИКС: показываем понятный текст, ключи turn/yourTurn добавлены в i18n
 function updateTurnInfo() {
-  turnInfo.textContent = `${t("turn")}: ${state.currentPlayer}`;
+  turnInfo.textContent = isMyTurn()
+    ? t("yourTurn")
+    : `${t("turn")}: ${state.currentPlayer}`;
+
   endTurnButton.disabled = !isMyTurn() || state.gameOver;
 }
 
@@ -294,11 +299,16 @@ function applyLanguage() {
   }
 }
 
-function showGameOver() {
+// ФИКС: заголовок оверлея заполняем, reason позволяет показать
+// «Соперник вышел» / «Соединение потеряно» вместо victory/defeat
+function showGameOver(reason) {
   stopTurnTimer();
   gameOverOverlay.classList.remove("hidden");
+  gameOverText.textContent = t("gameOver");
 
-  if (state.winner === null) {
+  if (reason) {
+    gameOverReason.textContent = reason;
+  } else if (state.winner === null) {
     gameOverReason.textContent = t("draw");
   } else if (state.winner === getMyPlayerId()) {
     gameOverReason.textContent = t("victory");
@@ -309,11 +319,43 @@ function showGameOver() {
 
 // --- Обработка выхода соперника ---
 
+// ФИКС: была захардкожена русская строка; не срабатывала повторно,
+// если игра уже окончена
 function handleOpponentLeft() {
+  if (state.gameOver) {
+    return;
+  }
+
   state.gameOver = true;
   state.winner = getMyPlayerId();
-  showGameOver();
-  gameOverReason.textContent = "Противник покинул игру. Вы победили!";
+  showGameOver(t("opponentLeft"));
+}
+
+// ФИКС: обрабатываем потерю соединения отдельно от «соперник вышел» —
+// раньше любой разрыв сокета показывал оверлей победы даже в меню
+function handleConnectionLost() {
+  stopTurnTimer();
+
+  if (state.gameOver) {
+    return;
+  }
+
+  // Игра ещё не началась — показываем статус на текущем экране
+  if (!state.map) {
+    const menuVisible = !document
+      .getElementById("menuScreen")
+      .classList.contains("hidden");
+
+    if (menuVisible) {
+      document.getElementById("menuStatus").textContent = t("connectionLost");
+    } else {
+      document.getElementById("lobbyStatus").textContent = t("connectionLost");
+    }
+
+    return;
+  }
+
+  showGameOver(t("connectionLost"));
 }
 
 // --- Выполнение действий ---
@@ -384,7 +426,15 @@ function runAction(action) {
       return true;
     }
 
-    startTurnTimer();
+    // ФИКС: таймер тикает только во время СВОЕГО хода —
+    // раньше после завершения хода у игрока тикал таймер чужого хода
+    if (isMyTurn()) {
+      startTurnTimer();
+    } else {
+      stopTurnTimer();
+      timerElement.textContent = "—";
+    }
+
     return true;
   }
 
@@ -685,11 +735,14 @@ playAgainButton.addEventListener("click", () => {
 
 // --- Сеть ---
 
+// ФИКС: connectionLost обрабатывается отдельно от opponentLeft
 onNetworkMessage((message) => {
   if (message.type === "gameAction") {
     runAction(message.action);
   } else if (message.type === "opponentLeft") {
     handleOpponentLeft();
+  } else if (message.type === "connectionLost") {
+    handleConnectionLost();
   }
 });
 

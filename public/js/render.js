@@ -140,7 +140,9 @@ function drawHpNumber(ctx, hp, cx, cy, ts) {
 function draw() {
   const ctx = state.ctx;
 
-  if (!ctx) {
+  // ФИКС: не рисуем, пока игра не инициализирована
+  // (иначе смена языка в меню убивала render-цикл навсегда)
+  if (!ctx || !state.map || !state.canvas) {
     return;
   }
 
@@ -309,8 +311,9 @@ function draw() {
 }
 
 // Точка входа: запускает цикл отрисовки
+// ФИКС: запускаем цикл только когда карта существует
 export function drawGame() {
-  if (!loopStarted) {
+  if (!loopStarted && state.map) {
     startLoop();
   }
 }

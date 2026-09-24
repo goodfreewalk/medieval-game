@@ -2,7 +2,7 @@ import { TERRAIN_KEYS } from "./terrain.js";
 
 const translations = {
   ru: {
-    title: "Прототип карты",
+    title: "Средневековая стратегия",
     infoDefault: "Кликни по клетке",
     cell: "Клетка",
     type: "Тип",
@@ -62,6 +62,13 @@ const translations = {
     opponentLeft: "Противник покинул игру",
     hostLeft: "Хост покинул комнату",
     playerLeft: "Игрок покинул комнату",
+    // ФИКС: ключи, которых не хватало (использовались в main.js)
+    turn: "Ход",
+    yourTurn: "Твой ход",
+    victory: "Победа!",
+    defeat: "Поражение",
+    connectionLost: "Соединение с сервером потеряно. Обновите страницу.",
+    reconnecting: "Переподключение…",
     terrain: {
       grass: "Равнина",
       forest: "Лес",
@@ -81,7 +88,7 @@ const translations = {
     }
   },
   en: {
-    title: "Map Prototype",
+    title: "Medieval Strategy",
     infoDefault: "Click a tile",
     cell: "Tile",
     type: "Type",
@@ -141,6 +148,13 @@ const translations = {
     opponentLeft: "Opponent left the game",
     hostLeft: "Host left the room",
     playerLeft: "Player left the room",
+    // FIX: keys used in main.js were missing
+    turn: "Turn",
+    yourTurn: "Your turn",
+    victory: "Victory!",
+    defeat: "Defeat",
+    connectionLost: "Connection to the server lost. Please reload the page.",
+    reconnecting: "Reconnecting…",
     terrain: {
       grass: "Plains",
       forest: "Forest",
