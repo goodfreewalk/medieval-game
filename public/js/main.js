@@ -15,7 +15,6 @@ import {
   unitName
 } from "./i18n.js";
 import {
-  PLAYER_COLORS,
   getUnitAtTile,
   UNIT_TYPES
 } from "./units.js";
@@ -101,7 +100,6 @@ function startTurnTimer() {
   }, 1000);
 }
 
-// Автозавершение хода: только у того, чей сейчас ход
 function autoEndTurn() {
   if (state.gameOver) {
     return;
@@ -128,7 +126,6 @@ function updateResources() {
 }
 
 function updateInfo() {
-  // Выбран юнит
   if (state.selectedUnit) {
     const unit = state.selectedUnit;
     const type = UNIT_TYPES[unit.type];
@@ -154,7 +151,6 @@ function updateInfo() {
     return;
   }
 
-  // Выбрана клетка
   if (state.selectedTile) {
     const terrain = state.map[state.selectedTile.y][state.selectedTile.x];
     const terrainDef = TERRAIN_DEFENSE[terrain] || 0;
@@ -164,7 +160,7 @@ function updateInfo() {
     let text = terrainName(terrain);
 
     if (!isPassable) {
-      text += ` | 👣 `;
+      text += ` | 🚫`;
     } else {
       text += ` | 👣 ${terrainCost}`;
     }
@@ -222,13 +218,12 @@ function updateRecruitPanel() {
     return;
   }
 
-  // Значки юнитов
   const icons = {
     militia: "🪓",
     archer: "🏹",
     swordsman: "⚔️",
     lightCavalry: "🏇",
-    heavyCavalry: "🏇️",
+    heavyCavalry: "🏇⚔️",
     horseArcher: "🏇🏹"
   };
 
@@ -239,7 +234,6 @@ function updateRecruitPanel() {
   for (const type of types) {
     const stats = UNIT_TYPES[type];
 
-    // Одна строка: кнопка найма + характеристики
     const row = document.createElement("div");
     row.className = "recruitRow";
 
@@ -313,10 +307,18 @@ function showGameOver() {
   }
 }
 
-// --- Выполнение действий (локально и от соперника) ---
+// --- Обработка выхода соперника ---
+
+function handleOpponentLeft() {
+  state.gameOver = true;
+  state.winner = getMyPlayerId();
+  showGameOver();
+  gameOverReason.textContent = "Противник покинул игру. Вы победили!";
+}
+
+// --- Выполнение действий ---
 
 function runAction(action) {
-  // Передвижение юнита
   if (action.kind === "move") {
     const result = applyMove(action.unitId, action.x, action.y);
 
@@ -328,11 +330,24 @@ function runAction(action) {
     return result.success;
   }
 
-  // Атака
   if (action.kind === "attack") {
     const result = applyAttack(action.attackerId, action.targetId);
 
     if (result.success) {
+      // Если атакующий погиб от контратаки — снимаем выделение
+      const attackerAlive = state.units.some(
+        unit => unit.id === action.attackerId
+      );
+
+      if (
+        !attackerAlive &&
+        state.selectedUnit &&
+        state.selectedUnit.id === action.attackerId
+      ) {
+        state.selectedUnit = null;
+        state.selectedTile = null;
+      }
+
       updateSelectionHighlights();
       refreshGame();
 
@@ -344,7 +359,6 @@ function runAction(action) {
     return result.success;
   }
 
-  // Найм юнита
   if (action.kind === "recruit") {
     const result = applyRecruit(action.type, action.x, action.y);
 
@@ -359,7 +373,6 @@ function runAction(action) {
     return result.success;
   }
 
-  // Завершение хода
   if (action.kind === "endTurn") {
     applyEndTurn();
 
@@ -378,7 +391,7 @@ function runAction(action) {
   return false;
 }
 
-// --- Камера: pan и масштаб ----------
+// --- Камера ---
 
 const gameContainer = document.getElementById("gameContainer");
 
@@ -405,7 +418,6 @@ function clampPan() {
   state.panY = Math.max(minY, Math.min(maxY, state.panY));
 }
 
-// Подгоняем камеру под размер контейнера
 function initCamera() {
   const rect = gameContainer.getBoundingClientRect();
 
@@ -432,7 +444,7 @@ window.addEventListener("resize", () => {
   initCamera();
 });
 
-// ---------- Жесты и мышь ----------
+// --- Жесты и мышь ---
 
 let isDragging = false;
 let dragMoved = false;
@@ -449,7 +461,6 @@ function getTouchDistance(touches) {
   return Math.hypot(dx, dy);
 }
 
-// Масштаб с центром в точке (localX, localY)
 function zoomAt(localX, localY, newZoom) {
   const worldX = (localX - state.panX) / state.zoom;
   const worldY = (localY - state.panY) / state.zoom;
@@ -462,8 +473,6 @@ function zoomAt(localX, localY, newZoom) {
   clampPan();
   applyCanvasTransform();
 }
-
-// --- Сенсорные жесты (телефон) ---
 
 gameContainer.addEventListener("touchstart", (e) => {
   if (e.touches.length === 1) {
@@ -518,8 +527,6 @@ gameContainer.addEventListener("touchend", (e) => {
   }
 });
 
-// --- Мышь: перетаскивание левой кнопкой (компьютер) ---
-
 gameContainer.addEventListener("mousedown", (e) => {
   if (e.button !== 0) {
     return;
@@ -556,8 +563,6 @@ window.addEventListener("mouseup", () => {
   isDragging = false;
 });
 
-// --- Колёсико мыши: масштаб (компьютер) ---
-
 gameContainer.addEventListener("wheel", (e) => {
   e.preventDefault();
 
@@ -570,10 +575,9 @@ gameContainer.addEventListener("wheel", (e) => {
   zoomAt(localX, localY, state.zoom * factor);
 }, { passive: false });
 
-// ---------- Клик по карте ----------
+// --- Клик по карте ---
 
 canvas.addEventListener("click", (event) => {
-  // Если было перетаскивание — это не клик
   if (dragMoved) {
     dragMoved = false;
     return;
@@ -591,7 +595,6 @@ canvas.addEventListener("click", (event) => {
 
   const clickedUnit = getUnitAtTile(state.units, tile.x, tile.y);
 
-  // Повторный клик по уже выбранному юниту — снять выделение
   if (clickedUnit && clickedUnit === state.selectedUnit) {
     state.selectedUnit = null;
     state.selectedTile = null;
@@ -604,7 +607,6 @@ canvas.addEventListener("click", (event) => {
     return;
   }
 
-  // Если кликнули по врагу и можно атаковать — атакуем
   if (
     isMyTurn() &&
     canAttackUnit(state.selectedUnit, clickedUnit)
@@ -622,7 +624,6 @@ canvas.addEventListener("click", (event) => {
     return;
   }
 
-  // Если кликнули по юниту — выбираем юнита
   if (clickedUnit) {
     state.selectedUnit = clickedUnit;
     state.selectedTile = tile;
@@ -633,7 +634,6 @@ canvas.addEventListener("click", (event) => {
     return;
   }
 
-  // Если выбран юнит и клик по доступной клетке — двигаем юнита
   if (state.selectedUnit && isMyTurn()) {
     const action = {
       kind: "move",
@@ -648,7 +648,6 @@ canvas.addEventListener("click", (event) => {
     }
   }
 
-  // Иначе просто выбираем клетку
   state.selectedUnit = null;
   state.selectedTile = tile;
   updateSelectionHighlights();
@@ -684,11 +683,13 @@ playAgainButton.addEventListener("click", () => {
   location.reload();
 });
 
-// --- Сеть: действия от соперника ---
+// --- Сеть ---
 
 onNetworkMessage((message) => {
   if (message.type === "gameAction") {
     runAction(message.action);
+  } else if (message.type === "opponentLeft") {
+    handleOpponentLeft();
   }
 });
 
