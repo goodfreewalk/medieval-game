@@ -7,6 +7,36 @@ const messageHandlers = [];
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
+// ФИКС: сессия игры для возврата после обрыва соединения
+const GAME_SESSION_KEY = "gameSession";
+
+export function saveGameSession(roomCode, playerId) {
+  try {
+    sessionStorage.setItem(
+      GAME_SESSION_KEY,
+      JSON.stringify({ roomCode, playerId })
+    );
+  } catch {
+    // sessionStorage может быть недоступен — не критично
+  }
+}
+
+export function clearGameSession() {
+  try {
+    sessionStorage.removeItem(GAME_SESSION_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function getGameSession() {
+  try {
+    return JSON.parse(sessionStorage.getItem(GAME_SESSION_KEY));
+  } catch {
+    return null;
+  }
+}
+
 export function onNetworkMessage(handler) {
   messageHandlers.push(handler);
 }
@@ -23,10 +53,20 @@ function connectToServer() {
   socket.onopen = () => {
     console.log("Подключено к серверу");
     reconnectAttempts = 0;
+
+    // ФИКС: есть сохранённая игра — пытаемся вернуться в неё
+    const session = getGameSession();
+
+    if (session) {
+      sendMessage({
+        type: "rejoinRoom",
+        roomCode: session.roomCode,
+        playerId: session.playerId
+      });
+    }
   };
 
   socket.onmessage = (event) => {
-    // Некорректное сообщение не должно ломать обработку
     let message;
 
     try {
@@ -49,7 +89,6 @@ function connectToServer() {
 
       setTimeout(connectToServer, delay);
     } else {
-      // Сдаёмся: сообщаем интерфейсу, что соединение потеряно
       dispatch({ type: "connectionLost" });
     }
   };
@@ -79,6 +118,10 @@ export function setReady(ready) {
 
 export function startGame() {
   sendMessage({ type: "startGame" });
+}
+
+export function leaveRoom() {
+  sendMessage({ type: "leaveRoom" });
 }
 
 connectToServer();

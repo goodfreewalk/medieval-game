@@ -35,6 +35,7 @@ const translations = {
     wins: "победил!",
     draw: "Ничья!",
     playAgain: "Играть снова",
+    leaveRoom: "Покинуть комнату",
     eliminated: "выбыл",
     defenseBonus: "Защита",
     moveCost: "Движение",
@@ -69,6 +70,11 @@ const translations = {
     defeat: "Поражение",
     connectionLost: "Соединение с сервером потеряно. Обновите страницу.",
     reconnecting: "Переподключение…",
+    // ФИКС: reconnect flow
+    opponentDisconnected: "Соперник отключился. Ожидание возвращения…",
+    opponentReconnected: "Соперник вернулся в игру",
+    syncingState: "Синхронизация состояния игры…",
+    gameAbandoned: "Игра завершена: соединение было потеряно слишком долго.",
     terrain: {
       grass: "Равнина",
       forest: "Лес",
@@ -121,6 +127,7 @@ const translations = {
     wins: "wins!",
     draw: "Draw!",
     playAgain: "Play Again",
+    leaveRoom: "Leave room",
     eliminated: "has been eliminated",
     defenseBonus: "Defense",
     moveCost: "Movement",
@@ -155,6 +162,11 @@ const translations = {
     defeat: "Defeat",
     connectionLost: "Connection to the server lost. Please reload the page.",
     reconnecting: "Reconnecting…",
+    // FIX: reconnect flow
+    opponentDisconnected: "Opponent disconnected. Waiting for them to return…",
+    opponentReconnected: "Opponent has returned to the game",
+    syncingState: "Synchronizing game state…",
+    gameAbandoned: "Game over: the connection was lost for too long.",
     terrain: {
       grass: "Plains",
       forest: "Forest",

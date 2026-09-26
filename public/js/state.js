@@ -1,4 +1,4 @@
-import { MAP_SIZE, TERRAIN, TERRAIN_COST } from "./terrain.js";
+import { MAP_SIZE, TERRAIN } from "./terrain.js";
 import { createInitialUnits } from "./units.js";
 
 export const state = {
@@ -169,27 +169,6 @@ export function captureTile(unit) {
   }
 
   setTileOwner(unit.x, unit.y, unit.owner);
-  return true;
-}
-
-export function isTileBlockedByUnit(x, y, ignoreUnit = null) {
-  return state.units.some(
-    unit => unit !== ignoreUnit && unit.x === x && unit.y === y
-  );
-}
-
-export function isTilePassable(x, y, ignoreUnit = null) {
-  const terrain = getTerrainAt(x, y);
-  const cost = TERRAIN_COST[terrain];
-
-  if (cost === Infinity) {
-    return false;
-  }
-
-  if (isTileBlockedByUnit(x, y, ignoreUnit)) {
-    return false;
-  }
-
   return true;
 }
 

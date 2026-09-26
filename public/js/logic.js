@@ -13,7 +13,6 @@ import {
 import {
   state,
   getTerrainAt,
-  isTilePassable,
   captureTile,
   collectIncome,
   getTileOwner,

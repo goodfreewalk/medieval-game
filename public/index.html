@@ -3,6 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏰</text></svg>">
+  <script>
+    // Грузим Telegram SDK только если игра открыта внутри Telegram.
+    // В обычном браузере запрос не выполняется — страница открывается мгновенно.
+    if (window.Telegram || /Telegram/i.test(navigator.userAgent)) {
+      const sdk = document.createElement("script");
+      sdk.src = "https://telegram.org/js/telegram-web-app.js";
+      document.head.appendChild(sdk);
+    }
+  </script>
   <title>Средневековая стратегия</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -36,6 +46,7 @@
       <div class="menuRow">
         <button id="readyBtn"></button>
         <button id="startBtn"></button>
+        <button id="leaveRoomBtn"></button>
       </div>
       <p id="lobbyStatus"></p>
     </div>
@@ -48,6 +59,9 @@
         <span id="timer"></span>
         <button id="endTurn"></button>
       </div>
+
+      <!-- ФИКС: строка статуса сети -->
+      <div id="netStatus"></div>
 
       <div id="resources"></div>
 
@@ -69,7 +83,6 @@
     </div>
   </div>
 
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script type="module" src="js/main.js"></script>
 </body>
 </html>

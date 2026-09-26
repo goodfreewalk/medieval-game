@@ -194,6 +194,16 @@ canvas {
   background-color: #b8860b;
 }
 
+#leaveRoomBtn {
+  padding: 10px 14px;
+  font-size: 14px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  background-color: #8a8a8a;
+  color: #ffffff;
+}
+
 #startBtn:disabled {
   background-color: #555;
   color: #aaa;
@@ -375,4 +385,11 @@ canvas {
 .recruitStats {
   font-size: 13px;
   color: #dddddd;
+}
+
+#netStatus {
+  min-height: 18px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #ffd76a;
 }

@@ -21,8 +21,13 @@ import {
 import { TERRAIN, TERRAIN_DEFENSE, TERRAIN_COST } from "./terrain.js";
 import { drawGame } from "./render.js";
 import { showScreen } from "./screens.js";
-import { initLobby, getMyPlayerId } from "./lobby.js";
-import { onNetworkMessage, sendMessage } from "./network.js";
+import { initLobby, getMyPlayerId, getRoomCode } from "./lobby.js";
+import {
+  onNetworkMessage,
+  sendMessage,
+  saveGameSession,
+  clearGameSession
+} from "./network.js";
 import {
   updateSelectionHighlights,
   canAttackUnit,
@@ -49,6 +54,15 @@ const gameOverText = document.getElementById("gameOverText");
 const gameOverReason = document.getElementById("gameOverReason");
 const playAgainButton = document.getElementById("playAgainBtn");
 
+// Строка статуса сети (переподключение / ожидание соперника)
+const netStatus = document.getElementById("netStatus");
+
+function setNetStatus(text) {
+  if (netStatus) {
+    netStatus.textContent = text;
+  }
+}
+
 // --- Таймер хода ---
 
 const TURN_TIME = 60;
@@ -67,12 +81,10 @@ function sendAction(action) {
 
 // --- Обновление интерфейса ---
 
-// ФИКС: показываем понятный текст, ключи turn/yourTurn добавлены в i18n
 function updateTurnInfo() {
   turnInfo.textContent = isMyTurn()
     ? t("yourTurn")
     : `${t("turn")}: ${state.currentPlayer}`;
-
   endTurnButton.disabled = !isMyTurn() || state.gameOver;
 }
 
@@ -95,6 +107,13 @@ function startTurnTimer() {
   updateTimerDisplay();
 
   timerInterval = setInterval(() => {
+    // Страховка: таймер живёт только во время своего хода
+    if (!isMyTurn()) {
+      stopTurnTimer();
+      timerElement.textContent = "—";
+      return;
+    }
+
     timeLeft -= 1;
     updateTimerDisplay();
 
@@ -228,7 +247,7 @@ function updateRecruitPanel() {
     archer: "🏹",
     swordsman: "⚔️",
     lightCavalry: "🏇",
-    heavyCavalry: "🏇⚔️",
+    heavyCavalry: "🏇️⚔️",
     horseArcher: "🏇🏹"
   };
 
@@ -299,11 +318,11 @@ function applyLanguage() {
   }
 }
 
-// ФИКС: заголовок оверлея заполняем, reason позволяет показать
-// «Соперник вышел» / «Соединение потеряно» вместо victory/defeat
 function showGameOver(reason) {
   stopTurnTimer();
+  clearGameSession();
   gameOverOverlay.classList.remove("hidden");
+
   gameOverText.textContent = t("gameOver");
 
   if (reason) {
@@ -319,8 +338,6 @@ function showGameOver(reason) {
 
 // --- Обработка выхода соперника ---
 
-// ФИКС: была захардкожена русская строка; не срабатывала повторно,
-// если игра уже окончена
 function handleOpponentLeft() {
   if (state.gameOver) {
     return;
@@ -331,8 +348,8 @@ function handleOpponentLeft() {
   showGameOver(t("opponentLeft"));
 }
 
-// ФИКС: обрабатываем потерю соединения отдельно от «соперник вышел» —
-// раньше любой разрыв сокета показывал оверлей победы даже в меню
+// --- Обработка потери соединения ---
+
 function handleConnectionLost() {
   stopTurnTimer();
 
@@ -358,13 +375,50 @@ function handleConnectionLost() {
   showGameOver(t("connectionLost"));
 }
 
+// --- Снапшот состояния для синхронизации вернувшегося игрока ---
+
+function serializeState() {
+  return {
+    map: state.map,
+    units: state.units,
+    owners: Array.from(state.owners.entries()),
+    players: state.players,
+    currentPlayer: state.currentPlayer,
+    gameOver: state.gameOver,
+    winner: state.winner
+  };
+}
+
+function applyFullState(snapshot) {
+  state.map = snapshot.map;
+  state.units = snapshot.units;
+  state.owners = new Map(snapshot.owners);
+  state.players = snapshot.players;
+  state.currentPlayer = snapshot.currentPlayer;
+  state.gameOver = snapshot.gameOver;
+  state.winner = snapshot.winner;
+
+  state.selectedUnit = null;
+  state.selectedTile = null;
+  state.reachableTiles = new Map();
+  state.attackableTiles = new Map();
+}
+
 // --- Выполнение действий ---
 
 function runAction(action) {
-  if (action.kind === "move") {
+    if (action.kind === "move") {
     const result = applyMove(action.unitId, action.x, action.y);
 
     if (result.success) {
+      // Держим фокус на юните: выделение следует за ним на новую клетку,
+      // иначе инфо и панель найма продолжают показывать замок/деревню
+      const movedUnit = state.units.find(u => u.id === action.unitId);
+
+      if (movedUnit && state.selectedUnit === movedUnit) {
+        state.selectedTile = { x: movedUnit.x, y: movedUnit.y };
+      }
+
       updateSelectionHighlights();
       refreshGame();
     }
@@ -388,6 +442,14 @@ function runAction(action) {
       ) {
         state.selectedUnit = null;
         state.selectedTile = null;
+      } else if (attackerAlive && state.selectedUnit) {
+        // Фокус на атакующем в его актуальной клетке
+        // (после добивания он мог встать на клетку цели)
+        const attacker = state.units.find(u => u.id === action.attackerId);
+
+        if (attacker && state.selectedUnit === attacker) {
+          state.selectedTile = { x: attacker.x, y: attacker.y };
+        }
       }
 
       updateSelectionHighlights();
@@ -426,8 +488,7 @@ function runAction(action) {
       return true;
     }
 
-    // ФИКС: таймер тикает только во время СВОЕГО хода —
-    // раньше после завершения хода у игрока тикал таймер чужого хода
+    // Таймер тикает только во время СВОЕГО хода
     if (isMyTurn()) {
       startTurnTimer();
     } else {
@@ -735,7 +796,6 @@ playAgainButton.addEventListener("click", () => {
 
 // --- Сеть ---
 
-// ФИКС: connectionLost обрабатывается отдельно от opponentLeft
 onNetworkMessage((message) => {
   if (message.type === "gameAction") {
     runAction(message.action);
@@ -743,6 +803,56 @@ onNetworkMessage((message) => {
     handleOpponentLeft();
   } else if (message.type === "connectionLost") {
     handleConnectionLost();
+  } else if (message.type === "reconnecting") {
+    // Идёт автопереподключение — показываем статус
+    setNetStatus(t("reconnecting"));
+  } else if (message.type === "rejoinOk") {
+    // Сессия принята — ждём полное состояние от соперника
+    setNetStatus(t("syncingState"));
+  } else if (message.type === "gameGone") {
+    // Комната умерла, пока мы были офлайн
+    clearGameSession();
+
+    if (state.map && !state.gameOver) {
+      state.gameOver = true;
+      showGameOver(t("gameAbandoned"));
+    }
+  } else if (message.type === "opponentDisconnected") {
+    // Соперник оборвался, но игра жива — ждём его
+    setNetStatus(t("opponentDisconnected"));
+  } else if (message.type === "opponentReconnected") {
+    setNetStatus("");
+  } else if (message.type === "requestState") {
+    // Соперник вернулся — присылаем ему актуальное состояние
+    sendMessage({ type: "fullState", state: serializeState() });
+  } else if (message.type === "fullState") {
+    // Мы вернулись — применяем состояние от соперника
+    applyFullState(message.state);
+
+    // ФИКС БАГА 2: возвращаемся на игровой экран после перезагрузки.
+    // initGame не вызывался, поэтому canvas/ctx/tileSize пустые —
+    // без этого карта не рисуется и клики умирают.
+    showScreen("gameScreen");
+
+    if (!state.canvas) {
+      state.canvas = canvas;
+      state.ctx = ctx;
+    }
+
+    state.tileSize = canvas.width / state.map.length;
+    initCamera();
+
+    setNetStatus("");
+    refreshGame();
+
+    if (state.gameOver) {
+      showGameOver();
+    } else if (isMyTurn()) {
+      startTurnTimer();
+    } else {
+      stopTurnTimer();
+      timerElement.textContent = "—";
+    }
   }
 });
 
@@ -754,6 +864,16 @@ initLobby({
     initCamera();
     initGame(canvas, ctx);
     applyLanguage();
-    startTurnTimer();
+
+    // Запоминаем сессию, чтобы вернуться после обрыва соединения
+    saveGameSession(getRoomCode(), getMyPlayerId());
+
+    // Таймер запускаем только если сейчас НАШ ход
+    if (isMyTurn()) {
+      startTurnTimer();
+    } else {
+      stopTurnTimer();
+      timerElement.textContent = "—";
+    }
   }
 });
