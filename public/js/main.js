@@ -21,7 +21,13 @@ import {
 import { TERRAIN, TERRAIN_DEFENSE, TERRAIN_COST } from "./terrain.js";
 import { drawGame } from "./render.js";
 import { showScreen } from "./screens.js";
-import { initLobby, getMyPlayerId, getRoomCode } from "./lobby.js";
+import {
+  initLobby,
+  getMyPlayerId,
+  getRoomCode,
+  upsertResumeCard,
+  removeResumeCard
+} from "./lobby.js";
 import {
   onNetworkMessage,
   sendMessage,
@@ -35,6 +41,7 @@ import {
   applyAttack,
   applyRecruit,
   applyEndTurn,
+  eliminatePlayer,
   getTileFromClick
 } from "./logic.js";
 
@@ -46,6 +53,7 @@ const info = document.getElementById("info");
 const turnInfo = document.getElementById("turnInfo");
 const timerElement = document.getElementById("timer");
 const endTurnButton = document.getElementById("endTurn");
+const saveGameBtn = document.getElementById("saveGameBtn");
 const resourcesElement = document.getElementById("resources");
 const recruitPanel = document.getElementById("recruitPanel");
 const langSelect = document.getElementById("lang");
@@ -54,7 +62,7 @@ const gameOverText = document.getElementById("gameOverText");
 const gameOverReason = document.getElementById("gameOverReason");
 const playAgainButton = document.getElementById("playAgainBtn");
 
-// Строка статуса сети (переподключение / ожидание соперника)
+// Строка статуса сети (переподключение / ожидание / сохранения)
 const netStatus = document.getElementById("netStatus");
 
 function setNetStatus(text) {
@@ -69,6 +77,17 @@ const TURN_TIME = 60;
 let timerInterval = null;
 let timeLeft = TURN_TIME;
 
+// --- Служебное состояние клиента ---
+
+// Заявки на устранение, уже отправные серверу (защита от спама)
+const pendingEliminations = new Set();
+
+// Данные резюма, ждущие fullState
+let pendingResume = null;
+
+// Защита от повторной отправки gameOver
+let gameOverSent = false;
+
 // --- Вспомогательные функции ---
 
 function isMyTurn() {
@@ -82,9 +101,18 @@ function sendAction(action) {
 // --- Обновление интерфейса ---
 
 function updateTurnInfo() {
-  turnInfo.textContent = isMyTurn()
-    ? t("yourTurn")
-    : `${t("turn")}: ${state.currentPlayer}`;
+  const kind = state.seatKinds[state.currentPlayer];
+
+  if (isMyTurn()) {
+    turnInfo.textContent = t("yourTurn");
+  } else if (kind === "passive") {
+    // Пассивное место: ход ведёт сервер
+    turnInfo.textContent =
+      `${t("seatLabel")} ${state.currentPlayer} — ${t("seatPassive")}`;
+  } else {
+    turnInfo.textContent = `${t("turn")}: ${state.currentPlayer}`;
+  }
+
   endTurnButton.disabled = !isMyTurn() || state.gameOver;
 }
 
@@ -107,7 +135,6 @@ function startTurnTimer() {
   updateTimerDisplay();
 
   timerInterval = setInterval(() => {
-    // Страховка: таймер живёт только во время своего хода
     if (!isMyTurn()) {
       stopTurnTimer();
       timerElement.textContent = "—";
@@ -143,10 +170,23 @@ function autoEndTurn() {
 function updateResources() {
   const player = getMyPlayerId();
 
-  resourcesElement.textContent =
-    `${t("gold")}: ${getPlayerGold(player)} | ` +
-    `${t("income")}: +${getIncome(player)} | ` +
-    `${t("supply")}: ${getSupplyUsed(player)}/${getSupplyCapacity(player)}`;
+  // Три карточки: золото, доход, снабжение
+  resourcesElement.innerHTML =
+    `<div class="statCard">` +
+    `<span class="statIcon">💰</span>` +
+    `<span class="statValue">${getPlayerGold(player)}</span>` +
+    `<span class="statLabel">${t("gold")}</span>` +
+    `</div>` +
+    `<div class="statCard">` +
+    `<span class="statIcon">📈</span>` +
+    `<span class="statValue">+${getIncome(player)}</span>` +
+    `<span class="statLabel">${t("income")}</span>` +
+    `</div>` +
+    `<div class="statCard">` +
+    `<span class="statIcon">📦</span>` +
+    `<span class="statValue">${getSupplyUsed(player)}/${getSupplyCapacity(player)}</span>` +
+    `<span class="statLabel">${t("supply")}</span>` +
+    `</div>`;
 }
 
 function updateInfo() {
@@ -297,11 +337,53 @@ function updateRecruitPanel() {
   }
 }
 
+// Боевое устранение: у места не осталось ни юнитов, ни зданий —
+// сообщаем серверу, он исключит место из очерёдности у всех
+function detectEliminations() {
+  if (!state.map || state.gameOver) {
+    return;
+  }
+
+  for (const key of Object.keys(state.players)) {
+    const id = Number(key);
+
+    if (state.eliminated.has(id) || pendingEliminations.has(id)) {
+      continue;
+    }
+
+    const hasUnits = state.units.some(unit => unit.owner === id);
+
+    if (hasUnits) {
+      continue;
+    }
+
+    let hasTerritory = false;
+
+    for (const owner of state.owners.values()) {
+      if (owner === id) {
+        hasTerritory = true;
+        break;
+      }
+    }
+
+    if (!hasTerritory) {
+      pendingEliminations.add(id);
+      sendMessage({ type: "reportElimination", playerId: id });
+    }
+  }
+}
+
 function refreshGame() {
   updateTurnInfo();
   updateResources();
   updateRecruitPanel();
   updateInfo();
+
+  // Кнопка сохранения видна только хосту во время игры
+  saveGameBtn.style.display =
+    getMyPlayerId() === 1 && state.map && !state.gameOver ? "" : "none";
+
+  detectEliminations();
   drawGame();
 }
 
@@ -310,6 +392,7 @@ function applyLanguage() {
 
   endTurnButton.textContent = t("endTurn");
   playAgainButton.textContent = t("playAgain");
+  saveGameBtn.textContent = t("saveGame");
 
   refreshGame();
 
@@ -321,6 +404,19 @@ function applyLanguage() {
 function showGameOver(reason) {
   stopTurnTimer();
   clearGameSession();
+
+  // Сообщаем серверу, чтобы результат увидели все, включая выбывших
+  if (state.map && !gameOverSent) {
+    gameOverSent = true;
+    sendMessage({ type: "gameOver", winner: state.winner });
+  }
+
+  // Карточка сохранения больше не нужна (кроме случая потери связи:
+  // там партия может продолжаться и пригодится возврат)
+  if (reason !== t("connectionLost") && getRoomCode()) {
+    removeResumeCard(getRoomCode());
+  }
+
   gameOverOverlay.classList.remove("hidden");
 
   gameOverText.textContent = t("gameOver");
@@ -357,7 +453,6 @@ function handleConnectionLost() {
     return;
   }
 
-  // Игра ещё не началась — показываем статус на текущем экране
   if (!state.map) {
     const menuVisible = !document
       .getElementById("menuScreen")
@@ -375,7 +470,7 @@ function handleConnectionLost() {
   showGameOver(t("connectionLost"));
 }
 
-// --- Снапшот состояния для синхронизации вернувшегося игрока ---
+// --- Снапшот состояния для синхронизации и сохранений ---
 
 function serializeState() {
   return {
@@ -385,7 +480,9 @@ function serializeState() {
     players: state.players,
     currentPlayer: state.currentPlayer,
     gameOver: state.gameOver,
-    winner: state.winner
+    winner: state.winner,
+    eliminated: Array.from(state.eliminated),
+    seatKinds: state.seatKinds
   };
 }
 
@@ -397,6 +494,8 @@ function applyFullState(snapshot) {
   state.currentPlayer = snapshot.currentPlayer;
   state.gameOver = snapshot.gameOver;
   state.winner = snapshot.winner;
+  state.eliminated = new Set(snapshot.eliminated || []);
+  state.seatKinds = snapshot.seatKinds || {};
 
   state.selectedUnit = null;
   state.selectedTile = null;
@@ -407,12 +506,10 @@ function applyFullState(snapshot) {
 // --- Выполнение действий ---
 
 function runAction(action) {
-    if (action.kind === "move") {
+  if (action.kind === "move") {
     const result = applyMove(action.unitId, action.x, action.y);
 
     if (result.success) {
-      // Держим фокус на юните: выделение следует за ним на новую клетку,
-      // иначе инфо и панель найма продолжают показывать замок/деревню
       const movedUnit = state.units.find(u => u.id === action.unitId);
 
       if (movedUnit && state.selectedUnit === movedUnit) {
@@ -430,7 +527,6 @@ function runAction(action) {
     const result = applyAttack(action.attackerId, action.targetId);
 
     if (result.success) {
-      // Если атакующий погиб от контратаки — снимаем выделение
       const attackerAlive = state.units.some(
         unit => unit.id === action.attackerId
       );
@@ -443,8 +539,6 @@ function runAction(action) {
         state.selectedUnit = null;
         state.selectedTile = null;
       } else if (attackerAlive && state.selectedUnit) {
-        // Фокус на атакующем в его актуальной клетке
-        // (после добивания он мог встать на клетку цели)
         const attacker = state.units.find(u => u.id === action.attackerId);
 
         if (attacker && state.selectedUnit === attacker) {
@@ -480,6 +574,9 @@ function runAction(action) {
   if (action.kind === "endTurn") {
     applyEndTurn();
 
+    // Сообщаем серверу, кто ходит следующим (единое правило реестра)
+    action.next = state.currentPlayer;
+
     updateSelectionHighlights();
     refreshGame();
 
@@ -488,7 +585,6 @@ function runAction(action) {
       return true;
     }
 
-    // Таймер тикает только во время СВОЕГО хода
     if (isMyTurn()) {
       startTurnTimer();
     } else {
@@ -767,7 +863,7 @@ canvas.addEventListener("click", (event) => {
   drawGame();
 });
 
-// --- Кнопка завершения хода ---
+// --- Кнопки панели хода ---
 
 endTurnButton.addEventListener("click", () => {
   if (!isMyTurn() || state.gameOver) {
@@ -779,6 +875,15 @@ endTurnButton.addEventListener("click", () => {
   if (runAction(action)) {
     sendAction(action);
   }
+});
+
+// Сохранение партии: только хост, только во время игры
+saveGameBtn.addEventListener("click", () => {
+  if (getMyPlayerId() !== 1 || !state.map || state.gameOver) {
+    return;
+  }
+
+  sendMessage({ type: "saveGame", state: serializeState() });
 });
 
 // --- Смена языка ---
@@ -799,18 +904,20 @@ playAgainButton.addEventListener("click", () => {
 onNetworkMessage((message) => {
   if (message.type === "gameAction") {
     runAction(message.action);
+  } else if (message.type === "autoEndTurn") {
+    // Сервер пропустил ход пассивного места — применяем локально
+    if (!state.gameOver && state.currentPlayer === message.playerId) {
+      runAction({ kind: "endTurn", auto: true });
+    }
   } else if (message.type === "opponentLeft") {
     handleOpponentLeft();
   } else if (message.type === "connectionLost") {
     handleConnectionLost();
   } else if (message.type === "reconnecting") {
-    // Идёт автопереподключение — показываем статус
     setNetStatus(t("reconnecting"));
   } else if (message.type === "rejoinOk") {
-    // Сессия принята — ждём полное состояние от соперника
     setNetStatus(t("syncingState"));
   } else if (message.type === "gameGone") {
-    // Комната умерла, пока мы были офлайн
     clearGameSession();
 
     if (state.map && !state.gameOver) {
@@ -818,20 +925,76 @@ onNetworkMessage((message) => {
       showGameOver(t("gameAbandoned"));
     }
   } else if (message.type === "opponentDisconnected") {
-    // Соперник оборвался, но игра жива — ждём его
     setNetStatus(t("opponentDisconnected"));
   } else if (message.type === "opponentReconnected") {
     setNetStatus("");
+  } else if (message.type === "playerEliminated") {
+    // Место выбыло (бой, обрыв, решение хоста): убираем юнитов,
+    // нейтрализуем здания, сдвигаем очерёдность по подсказке сервера
+    pendingEliminations.delete(message.playerId);
+    eliminatePlayer(message.playerId, message.nextTurn);
+    delete state.seatKinds[message.playerId];
+    setNetStatus("");
+    refreshGame();
+
+    if (message.playerId === getMyPlayerId()) {
+      showGameOver(t("eliminatedYou"));
+    } else if (state.gameOver) {
+      showGameOver();
+    }
   } else if (message.type === "requestState") {
-    // Соперник вернулся — присылаем ему актуальное состояние
+  // Соперник вернулся — присылаем состояние, только если оно у нас есть
+  if (state.map) {
     sendMessage({ type: "fullState", state: serializeState() });
+  }
+  } else if (message.type === "saveOk") {
+    // Хост получил ключ возврата — обновляем карточку сохранения
+    upsertResumeCard(getRoomCode(), getMyPlayerId(), message.token);
+    setNetStatus(t("gameSaved"));
+    setTimeout(() => setNetStatus(""), 2500);
+  } else if (message.type === "guestRequest") {
+    // Владелец пассив-места вернулся посреди партии: хост решает
+    const answer = window.confirm(
+      `${message.name} → ${t("seatLabel")} ${message.seatId}. ` +
+      t("guestAcceptQuestion")
+    );
+
+    sendMessage(
+      answer
+        ? {
+            type: "acceptGuest",
+            guestId: message.guestId,
+            seatId: message.seatId
+          }
+        : { type: "denyGuest", guestId: message.guestId }
+    );
+  } else if (message.type === "playerReturned") {
+    setNetStatus("");
+    refreshGame();
+  } else if (message.type === "gameOver") {
+    // Результат партии для всех, включая выбывших зрителей
+    if (!state.gameOver) {
+      state.gameOver = true;
+      state.winner = message.winner;
+      refreshGame();
+      showGameOver();
+    }
   } else if (message.type === "fullState") {
-    // Мы вернулись — применяем состояние от соперника
     applyFullState(message.state);
 
-    // ФИКС БАГА 2: возвращаемся на игровой экран после перезагрузки.
-    // initGame не вызывался, поэтому canvas/ctx/tileSize пустые —
-    // без этого карта не рисуется и клики умирают.
+    // Резюм: устраняем выбранные хостом места и применяем виды мест
+    if (pendingResume) {
+      for (const id of pendingResume.eliminated) {
+        eliminatePlayer(
+          id,
+          id === state.currentPlayer ? pendingResume.turn : null
+        );
+      }
+
+      state.seatKinds = pendingResume.seatKinds;
+      pendingResume = null;
+    }
+
     showScreen("gameScreen");
 
     if (!state.canvas) {
@@ -859,16 +1022,51 @@ onNetworkMessage((message) => {
 // --- Старт лобби ---
 
 initLobby({
-  onGameStart: () => {
+  onGameStart: (message) => {
+    gameOverSent = false;
+    pendingEliminations.clear();
+
+    // message.seats: [{ id, kind }] в игре и резюме
+    const seatIds = [];
+    const seatKinds = {};
+
+    for (const seat of message.seats || []) {
+      if (seat && typeof seat === "object") {
+        seatIds.push(seat.id);
+        seatKinds[seat.id] = seat.kind || "human";
+      } else {
+        seatIds.push(seat);
+        seatKinds[seat] = "human";
+      }
+    }
+
+    if (message.resume) {
+      // Резюм: состояние придёт следующим сообщением fullState
+      pendingResume = {
+        eliminated: message.eliminated || [],
+        turn: message.turn,
+        seatKinds
+      };
+
+      saveGameSession(getRoomCode(), getMyPlayerId());
+      upsertResumeCard(getRoomCode(), getMyPlayerId(), null);
+      applyLanguage();
+      return;
+    }
+
+    state.seatKinds = seatKinds;
+
     showScreen("gameScreen");
     initCamera();
-    initGame(canvas, ctx);
+    initGame(canvas, ctx, {
+      mapId: message.mapId,
+      seats: seatIds
+    });
     applyLanguage();
 
-    // Запоминаем сессию, чтобы вернуться после обрыва соединения
     saveGameSession(getRoomCode(), getMyPlayerId());
+    upsertResumeCard(getRoomCode(), getMyPlayerId(), null);
 
-    // Таймер запускаем только если сейчас НАШ ход
     if (isMyTurn()) {
       startTurnTimer();
     } else {
@@ -877,3 +1075,6 @@ initLobby({
     }
   }
 });
+
+// Кнопка сохранения скрыта до старта игры
+saveGameBtn.style.display = "none";

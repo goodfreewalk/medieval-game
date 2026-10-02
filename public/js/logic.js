@@ -1,5 +1,4 @@
 import {
-  MAP_SIZE,
   TERRAIN,
   TERRAIN_COST,
   TERRAIN_DEFENSE
@@ -24,6 +23,7 @@ import {
 export function getReachableTiles(unit) {
   const reachable = new Map();
   const movement = unit.movementLeft;
+  const size = state.map.length;
 
   if (movement <= 0) {
     return reachable;
@@ -55,11 +55,10 @@ export function getReachableTiles(unit) {
       const nextX = current.x + dir.x;
       const nextY = current.y + dir.y;
 
-      if (nextX < 0 || nextX >= MAP_SIZE || nextY < 0 || nextY >= MAP_SIZE) {
+      if (nextX < 0 || nextX >= size || nextY < 0 || nextY >= size) {
         continue;
       }
 
-      // Проходимость местности
       const terrain = getTerrainAt(nextX, nextY);
       const terrainCost = TERRAIN_COST[terrain];
 
@@ -67,7 +66,6 @@ export function getReachableTiles(unit) {
         continue;
       }
 
-      // Чужие юниты блокируют путь, свои — можно пройти насквозь
       const occupant = getUnitAtTile(state.units, nextX, nextY);
 
       if (occupant && occupant.owner !== unit.owner) {
@@ -86,7 +84,6 @@ export function getReachableTiles(unit) {
       if (previousCost === undefined || newCost < previousCost) {
         bestCost.set(key, newCost);
 
-        // Остановиться на своей клетке нельзя, пройти — можно
         if (!occupant) {
           reachable.set(key, {
             x: nextX,
@@ -210,7 +207,6 @@ export function calculateDamage(attacker, defender) {
   return Math.min(100, damage);
 }
 
-// Бой: изменяет только юнитов, выделение не трогает
 export function performAttack(attacker, defender) {
   const damageToDefender = calculateDamage(attacker, defender);
 
@@ -260,7 +256,6 @@ export function performAttack(attacker, defender) {
   };
 }
 
-// Действие: движение юнита
 export function applyMove(unitId, x, y) {
   const unit = state.units.find(u => u.id === unitId);
 
@@ -290,7 +285,6 @@ export function applyMove(unitId, x, y) {
   return { success: true };
 }
 
-// Действие: атака
 export function applyAttack(attackerId, targetId) {
   const attacker = state.units.find(u => u.id === attackerId);
   const defender = state.units.find(u => u.id === targetId);
@@ -313,7 +307,6 @@ export function applyAttack(attackerId, targetId) {
   };
 }
 
-// Действие: найм юнита
 export function applyRecruit(type, x, y) {
   if (!UNIT_TYPES[type]) {
     return { success: false };
@@ -363,20 +356,73 @@ export function applyRecruit(type, x, y) {
   return { success: true };
 }
 
-// Действие: завершение хода
 export function applyEndTurn() {
   endTurn();
 }
 
+// Жив ли игрок: есть юниты или территория
+function isPlayerAlive(playerId) {
+  if (state.units.some(unit => unit.owner === playerId)) {
+    return true;
+  }
+
+  const size = state.map.length;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (getTileOwner(x, y) === playerId) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+// Следующий ход: по реестру мест, устранённые пропускаются.
+// Это же правило считает сервер — поэтому очерёдность не разъезжается.
+function getNextPlayer() {
+  const ids = Object.keys(state.players)
+    .map(Number)
+    .filter(id => !state.eliminated.has(id))
+    .sort((a, b) => a - b);
+
+  if (ids.length === 0) {
+    return state.currentPlayer;
+  }
+
+  const index = ids.indexOf(state.currentPlayer);
+  const start = index === -1 ? 0 : index + 1;
+
+  for (let step = 0; step < ids.length; step++) {
+    const candidate = ids[(start + step) % ids.length];
+
+    if (candidate !== state.currentPlayer && isPlayerAlive(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Все остальные «мертвы» по юнитам, но места живы:
+  // ход всё равно передаём по реестру
+  for (let step = 0; step < ids.length; step++) {
+    const candidate = ids[(start + step) % ids.length];
+
+    if (candidate !== state.currentPlayer) {
+      return candidate;
+    }
+  }
+
+  return state.currentPlayer;
+}
+
 export function endTurn() {
-  // Захват территорий при завершении хода
   for (const unit of state.units) {
     if (unit.owner === state.currentPlayer) {
       captureTile(unit);
     }
   }
 
-  state.currentPlayer = state.currentPlayer === 1 ? 2 : 1;
+  state.currentPlayer = getNextPlayer();
 
   for (const unit of state.units) {
     if (unit.owner === state.currentPlayer) {
@@ -395,28 +441,82 @@ export function endTurn() {
   checkEliminationAndVictory();
 }
 
-// Проверка устранения и победы
+// Устранение места (бой, дисконнект, решение хоста при возврате):
+// юниты исчезают, здания нейтрализуются, место выходит из очерёдности
+export function eliminatePlayer(playerId, nextTurn = null) {
+  state.eliminated.add(playerId);
+  state.units = state.units.filter(unit => unit.owner !== playerId);
+
+  const size = state.map.length;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (getTileOwner(x, y) === playerId) {
+        state.owners.set(`${x},${y}`, 0);
+      }
+    }
+  }
+
+  if (state.currentPlayer === playerId) {
+    const ids = Object.keys(state.players)
+      .map(Number)
+      .filter(id => !state.eliminated.has(id))
+      .sort((a, b) => a - b);
+
+    const target =
+      nextTurn !== null && nextTurn !== undefined && ids.includes(nextTurn)
+        ? nextTurn
+        : getNextPlayer();
+
+    state.currentPlayer = target;
+
+    for (const unit of state.units) {
+      if (unit.owner === target) {
+        unit.hasAttacked = false;
+        unit.movementLeft = UNIT_TYPES[unit.type].movement;
+      }
+    }
+
+    collectIncome(target);
+  }
+
+  if (state.selectedUnit && !state.units.includes(state.selectedUnit)) {
+    state.selectedUnit = null;
+    state.selectedTile = null;
+    state.reachableTiles = new Map();
+    state.attackableTiles = new Map();
+  }
+
+  checkEliminationAndVictory();
+}
+
 export function checkEliminationAndVictory() {
   if (state.gameOver) {
     return;
   }
 
   const playersWithUnits = new Set();
+
   for (const unit of state.units) {
     playersWithUnits.add(unit.owner);
   }
 
   const playersWithTerritories = new Set();
-  for (let y = 0; y < MAP_SIZE; y++) {
-    for (let x = 0; x < MAP_SIZE; x++) {
+  const size = state.map.length;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
       const owner = getTileOwner(x, y);
+
       if (owner !== 0) {
         playersWithTerritories.add(owner);
       }
     }
   }
 
-  const allPlayers = Object.keys(state.players).map(Number);
+  const allPlayers = Object.keys(state.players)
+    .map(Number)
+    .filter(id => !state.eliminated.has(id));
 
   const alivePlayers = allPlayers.filter(
     player => playersWithUnits.has(player) || playersWithTerritories.has(player)
@@ -441,10 +541,12 @@ export function getTileFromClick(event) {
   const canvasX = (event.clientX - rect.left) * scaleX;
   const canvasY = (event.clientY - rect.top) * scaleY;
 
+  const size = state.map.length;
+
   const x = Math.floor(canvasX / state.tileSize);
   const y = Math.floor(canvasY / state.tileSize);
 
-  if (x < 0 || x >= MAP_SIZE || y < 0 || y >= MAP_SIZE) {
+  if (x < 0 || x >= size || y < 0 || y >= size) {
     return null;
   }
 

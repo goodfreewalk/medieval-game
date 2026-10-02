@@ -190,19 +190,28 @@ function draw() {
         ctx.strokeRect(px + 1.5, py + 1.5, ts - 3, ts - 3);
       }
 
-      // Значок владельца на зданиях
-      if (
-        owner !== 0 &&
-        (terrain === TERRAIN.CASTLE || terrain === TERRAIN.VILLAGE)
-      ) {
-        ctx.beginPath();
-        ctx.arc(px + ts * 0.82, py + ts * 0.18, ts * 0.12, 0, Math.PI * 2);
-        ctx.fillStyle = PLAYER_COLORS[owner];
-        ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = "#ffffff";
-        ctx.stroke();
-      }
+    // Флаг владельца на зданиях: древко + сплошное прямоугольное полотнище
+    if (
+      owner !== 0 &&
+      (terrain === TERRAIN.CASTLE || terrain === TERRAIN.VILLAGE)
+    ) {
+      const poleWidth = Math.max(2, ts * 0.05);
+      const fx = px + ts * 0.74;
+      const fy = py + ts * 0.08;
+
+      // Древко
+      ctx.fillStyle = "#3a2b1a";
+      ctx.fillRect(fx, fy, poleWidth, ts * 0.36);
+
+      // Полотнище цвета игрока
+      ctx.fillStyle = PLAYER_COLORS[owner];
+      ctx.fillRect(fx + poleWidth, fy, ts * 0.26, ts * 0.17);
+
+      // Тёмная окантовка для читаемости на любом фоне
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(fx + poleWidth, fy, ts * 0.26, ts * 0.17);
+    }
 
       ctx.strokeStyle = "rgba(0,0,0,0.08)";
       ctx.lineWidth = 1;

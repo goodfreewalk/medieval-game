@@ -7,7 +7,7 @@ const messageHandlers = [];
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
-// ФИКС: сессия игры для возврата после обрыва соединения
+// Сессия игры для возврата после обрыва соединения (по вкладка жива)
 const GAME_SESSION_KEY = "gameSession";
 
 export function saveGameSession(roomCode, playerId) {
@@ -54,7 +54,7 @@ function connectToServer() {
     console.log("Подключено к серверу");
     reconnectAttempts = 0;
 
-    // ФИКС: есть сохранённая игра — пытаемся вернуться в неё
+    // Есть сохранённая сессия — пытаемся вернуться в игру
     const session = getGameSession();
 
     if (session) {
@@ -84,9 +84,7 @@ function connectToServer() {
     if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
       reconnectAttempts += 1;
       const delay = Math.min(5000, 500 * reconnectAttempts);
-
       dispatch({ type: "reconnecting", attempt: reconnectAttempts });
-
       setTimeout(connectToServer, delay);
     } else {
       dispatch({ type: "connectionLost" });
@@ -108,8 +106,9 @@ export function createRoom(name) {
   sendMessage({ type: "createRoom", name });
 }
 
-export function joinRoom(code, name) {
-  sendMessage({ type: "joinRoom", roomCode: code, name });
+// preferredSeat — заявка на место (карточка сохранения, возврат владельца)
+export function joinRoom(code, name, preferredSeat = null) {
+  sendMessage({ type: "joinRoom", roomCode: code, name, preferredSeat });
 }
 
 export function setReady(ready) {
@@ -120,6 +119,7 @@ export function startGame() {
   sendMessage({ type: "startGame" });
 }
 
+// Вежливый выход из комнаты/лобби
 export function leaveRoom() {
   sendMessage({ type: "leaveRoom" });
 }
