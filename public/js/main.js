@@ -65,7 +65,23 @@ const playAgainButton = document.getElementById("playAgainBtn");
 // Строка статуса сети (переподключение / ожидание / сохранения)
 const netStatus = document.getElementById("netStatus");
 
+// Панель заявок на место (вместо системного confirm)
+const guestRequests = document.getElementById("guestRequests");
+const pendingGuestRequests = new Map();
+
+// «Липкий» статус: важное постоянное сообщение (например, «хост отключился»).
+// Временные статусы его перекрывают, но при очистке оно возвращается.
+let stickyStatus = "";
+
 function setNetStatus(text) {
+  if (netStatus) {
+    netStatus.textContent = text !== "" ? text : stickyStatus;
+  }
+}
+
+function setStickyStatus(text) {
+  stickyStatus = text;
+
   if (netStatus) {
     netStatus.textContent = text;
   }
@@ -79,7 +95,7 @@ let timeLeft = TURN_TIME;
 
 // --- Служебное состояние клиента ---
 
-// Заявки на устранение, уже отправные серверу (защита от спама)
+// Заявки на устранение, уже отправленные серверу (защита от спама)
 const pendingEliminations = new Set();
 
 // Данные резюма, ждущие fullState
@@ -96,6 +112,66 @@ function isMyTurn() {
 
 function sendAction(action) {
   sendMessage({ type: "gameAction", action });
+}
+
+// --- Панель заявок на место ---
+
+function addGuestRequest(message) {
+  // Повторная заявка того же гостя — не дублируем
+  if (pendingGuestRequests.has(message.guestId)) {
+    return;
+  }
+
+  const card = document.createElement("div");
+  card.className = "guestRequestCard";
+
+  const title = document.createElement("div");
+  title.textContent =
+    `${t("guestRequestTitle")}: ${message.name} → ` +
+    `${t("seatLabel")} ${message.seatId}`;
+  card.appendChild(title);
+
+  const row = document.createElement("div");
+  row.className = "guestRequestRow";
+
+  const acceptBtn = document.createElement("button");
+  acceptBtn.textContent = t("acceptGuestBtn");
+  acceptBtn.addEventListener("click", () => {
+    sendMessage({
+      type: "acceptGuest",
+      guestId: message.guestId,
+      seatId: message.seatId
+    });
+    removeGuestRequest(message.guestId);
+  });
+
+  const denyBtn = document.createElement("button");
+  denyBtn.textContent = t("denyGuestBtn");
+  denyBtn.addEventListener("click", () => {
+    sendMessage({ type: "denyGuest", guestId: message.guestId });
+    removeGuestRequest(message.guestId);
+  });
+
+  row.appendChild(acceptBtn);
+  row.appendChild(denyBtn);
+  card.appendChild(row);
+
+  guestRequests.appendChild(card);
+  pendingGuestRequests.set(message.guestId, card);
+}
+
+function removeGuestRequest(guestId) {
+  const card = pendingGuestRequests.get(guestId);
+
+  if (card) {
+    card.remove();
+    pendingGuestRequests.delete(guestId);
+  }
+}
+
+function clearGuestRequests() {
+  guestRequests.innerHTML = "";
+  pendingGuestRequests.clear();
 }
 
 // --- Обновление интерфейса ---
@@ -383,6 +459,13 @@ function refreshGame() {
   saveGameBtn.style.display =
     getMyPlayerId() === 1 && state.map && !state.gameOver ? "" : "none";
 
+  // Предохранитель: если сервер считает НАШЕ место пассивным,
+  // честно говорим об этом вместо молчаливого бесправия
+  if (state.map && !state.gameOver &&
+      state.seatKinds[getMyPlayerId()] === "passive") {
+    setNetStatus(t("seatSelfPassive"));
+  }
+
   detectEliminations();
   drawGame();
 }
@@ -403,18 +486,24 @@ function applyLanguage() {
 
 function showGameOver(reason) {
   stopTurnTimer();
-  clearGameSession();
+  clearGuestRequests();
 
-  // Сообщаем серверу, чтобы результат увидели все, включая выбывших
-  if (state.map && !gameOverSent) {
-    gameOverSent = true;
-    sendMessage({ type: "gameOver", winner: state.winner });
+  // При потере соединения сессию НЕ чистим: после перезагрузки
+  // страницы игрок сможет вернуться в ещё живую комнату
+  if (reason !== t("connectionLost")) {
+    clearGameSession();
   }
 
   // Карточка сохранения больше не нужна (кроме случая потери связи:
   // там партия может продолжаться и пригодится возврат)
   if (reason !== t("connectionLost") && getRoomCode()) {
     removeResumeCard(getRoomCode());
+  }
+
+  // Сообщаем серверу, чтобы результат увидели все, включая выбывших
+  if (state.map && !gameOverSent) {
+    gameOverSent = true;
+    sendMessage({ type: "gameOver", winner: state.winner });
   }
 
   gameOverOverlay.classList.remove("hidden");
@@ -925,8 +1014,20 @@ onNetworkMessage((message) => {
       showGameOver(t("gameAbandoned"));
     }
   } else if (message.type === "opponentDisconnected") {
-    setNetStatus(t("opponentDisconnected"));
+    // Хост отключился: игра продолжается, но сохранение и возврат
+    // умрут вместе с его ключом — честно предупреждаем остальных
+    if (message.playerId === 1) {
+      setStickyStatus(
+        `${t("hostOffline")} ${getRoomCode()} — ${t("noSaveResume")}`
+      );
+    } else {
+      setNetStatus(t("opponentDisconnected"));
+    }
   } else if (message.type === "opponentReconnected") {
+    // Хост вернулся в grace-окно — сохранение снова возможно
+    if (message.playerId === 1) {
+      setStickyStatus("");
+    }
     setNetStatus("");
   } else if (message.type === "playerEliminated") {
     // Место выбыло (бой, обрыв, решение хоста): убираем юнитов,
@@ -939,36 +1040,36 @@ onNetworkMessage((message) => {
 
     if (message.playerId === getMyPlayerId()) {
       showGameOver(t("eliminatedYou"));
+    } else if (message.playerId === 1) {
+      // Хост выбыл окончательно: ключ возврата потерян навсегда
+      setStickyStatus(`${t("hostEliminated")} — ${t("noSaveResume")}`);
     } else if (state.gameOver) {
       showGameOver();
     }
   } else if (message.type === "requestState") {
-  // Соперник вернулся — присылаем состояние, только если оно у нас есть
-  if (state.map) {
-    sendMessage({ type: "fullState", state: serializeState() });
-  }
+    // Соперник вернулся — присылаем состояние, только если оно у нас есть
+    if (state.map) {
+      sendMessage({ type: "fullState", state: serializeState() });
+    }
   } else if (message.type === "saveOk") {
     // Хост получил ключ возврата — обновляем карточку сохранения
     upsertResumeCard(getRoomCode(), getMyPlayerId(), message.token);
     setNetStatus(t("gameSaved"));
     setTimeout(() => setNetStatus(""), 2500);
   } else if (message.type === "guestRequest") {
-    // Владелец пассив-места вернулся посреди партии: хост решает
-    const answer = window.confirm(
-      `${message.name} → ${t("seatLabel")} ${message.seatId}. ` +
-      t("guestAcceptQuestion")
-    );
-
-    sendMessage(
-      answer
-        ? {
-            type: "acceptGuest",
-            guestId: message.guestId,
-            seatId: message.seatId
-          }
-        : { type: "denyGuest", guestId: message.guestId }
-    );
+    // Владелец пассив-места вернулся посреди партии:
+    // хост решает через панель заявок (без системного confirm)
+    addGuestRequest(message);
   } else if (message.type === "playerReturned") {
+    // Сервер — источник истины о видах мест: принимаем реестр
+    if (Array.isArray(message.seats)) {
+      state.seatKinds = {};
+
+      for (const seat of message.seats) {
+        state.seatKinds[seat.id] = seat.kind || "human";
+      }
+    }
+
     setNetStatus("");
     refreshGame();
   } else if (message.type === "gameOver") {
@@ -1025,6 +1126,8 @@ initLobby({
   onGameStart: (message) => {
     gameOverSent = false;
     pendingEliminations.clear();
+    clearGuestRequests();
+    setStickyStatus("");
 
     // message.seats: [{ id, kind }] в игре и резюме
     const seatIds = [];

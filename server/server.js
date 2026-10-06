@@ -19,6 +19,9 @@ const AUTO_TURN_DELAY_MS = 4000;
 // Ожидание возврата отключившегося игрока
 const RECONNECT_GRACE_MS = 60000;
 
+// Сколько ждём fullState от соперников, прежде чем включить резерв
+const STATE_FALLBACK_MS = 3000;
+
 const app = express();
 
 app.use(
@@ -41,7 +44,7 @@ const wss = new WebSocketServer({
 console.log("WebSocket готов");
 
 // Комната: {
-//   players: [{ ws, id, name, ready, disconnected, disconnectTimer }],
+//   players: [{ ws, id, name, ready, disconnected, disconnectTimer, hasState }],
 //   guests: [{ ws, guestId, name, requestedSeat }],
 //   phase: "lobby" | "game",
 //   resumeLobby: bool,
@@ -179,11 +182,7 @@ function nextSeat(room, fromId) {
   const index = ids.indexOf(fromId);
   const start = index === -1 ? 0 : index + 1;
 
-  for (let step = 0; step < ids.length; step++) {
-    return ids[(start + step) % ids.length];
-  }
-
-  return ids[0];
+  return ids[start % ids.length];
 }
 
 function seatKind(room, id) {
@@ -217,6 +216,47 @@ function armAutoTurn(room) {
     room.turn = nextSeat(room, room.turn);
     armAutoTurn(room);
   }, AUTO_TURN_DELAY_MS);
+}
+
+// Резерв синхронизации: если за STATE_FALLBACK_MS никто из соперников
+// не прислал состояние, пробуем сейв комнаты (резюм) или сейв на диске.
+// Если источника нет совсем — освобождаем слот, чтобы зомби-сокет
+// не блокировал резюм и вход по карточке.
+function armStateFallback(room, targetId, code) {
+  setTimeout(() => {
+    if (room.pendingStateFor !== targetId) {
+      return;
+    }
+
+    room.pendingStateFor = undefined;
+
+    const slot = room.players.find(p => p.id === targetId);
+    if (!slot || !slot.ws || slot.ws.readyState !== 1) {
+      return;
+    }
+
+    let state = room.saveData ? room.saveData.state : null;
+
+    if (!state) {
+      const { save } = readSave(code);
+      if (save) {
+        state = save.state;
+      }
+    }
+
+    if (state) {
+      slot.hasState = true;
+      sendTo(slot.ws, { type: "fullState", state });
+      console.log(`Состояние для места ${targetId} восстановлено из сохранения`);
+    } else {
+      const wsTarget = slot.ws;
+      slot.disconnected = true;
+      slot.ws = null;
+      slot.hasState = false;
+      sendTo(wsTarget, { type: "gameGone" });
+      console.log(`Состояние для места ${targetId} потеряно: слот освобождён`);
+    }
+  }, STATE_FALLBACK_MS);
 }
 
 // Устранение места: бой, grace-дисконнект, выход, решение хоста
@@ -311,7 +351,8 @@ wss.on("connection", (ws) => {
         ws,
         id: 1,
         name: String(message.name || "Игрок 1").slice(0, 24),
-        ready: false
+        ready: false,
+        hasState: false
       });
 
       ws.roomCode = code;
@@ -369,23 +410,67 @@ wss.on("connection", (ws) => {
     if (message.type === "resumeGame") {
       const code = String(message.roomCode || "").toUpperCase();
 
-      // Если комната ещё жива — решаем, можно ли её перезапустить
       if (rooms.has(code)) {
         const existing = rooms.get(code);
-        const allDisconnected = existing.players.every(p => p.disconnected);
-        const hasConnected = existing.players.some(
-          p => !p.disconnected && p.ws
+        const statefulConnected = existing.players.some(
+          p => !p.disconnected && p.hasState
         );
 
-        if (allDisconnected || existing.players.length === 0) {
-          // Комната мертва (все офлайн) — закрываем и стартуем из сейва
+        if (!statefulConnected) {
+          // Никто не держит живое состояние: закрываем зомби-комнату
+          // и стартуем из сейва. Гостям в заявках сообщаем о закрытии
           clearTimeout(existing.autoTimer);
           for (const p of existing.players) {
             clearTimeout(p.disconnectTimer);
           }
+          for (const guest of existing.guests || []) {
+            sendTo(guest.ws, { type: "roomClosed", code: "hostLeft" });
+          }
           rooms.delete(code);
-        } else if (hasConnected) {
-          // Кто-то ещё играет — не мешаем
+        } else {
+          // Игра реально живая. Хост с ключом возвращается в своё место,
+          // если его слот отключён
+          const slot = existing.players.find(p => p.id === 1);
+
+          if (slot && slot.disconnected) {
+            slot.ws = ws;
+            slot.disconnected = false;
+            slot.hasState = false;
+
+            clearTimeout(slot.disconnectTimer);
+            slot.disconnectTimer = null;
+
+            ws.roomCode = code;
+            ws.playerId = 1;
+
+            sendTo(ws, {
+              type: "rejoinOk",
+              playerId: 1,
+              roomCode: code
+            });
+
+            for (const player of existing.players) {
+              if (player.id !== 1) {
+                sendTo(player.ws, {
+                  type: "opponentReconnected",
+                  playerId: 1
+                });
+              }
+            }
+
+            existing.pendingStateFor = 1;
+
+            for (const player of existing.players) {
+              if (player.id !== 1) {
+                sendTo(player.ws, { type: "requestState" });
+              }
+            }
+
+            armStateFallback(existing, 1, code);
+            return;
+          }
+
+          // Хост уже в игре (например, во второй вкладке)
           sendTo(ws, { type: "error", code: "gameInProgress" });
           return;
         }
@@ -428,7 +513,8 @@ wss.on("connection", (ws) => {
         ws,
         id: 1,
         name: String(message.name || "Игрок 1").slice(0, 24),
-        ready: true
+        ready: true,
+        hasState: false
       });
 
       ws.roomCode = code;
@@ -474,6 +560,7 @@ wss.on("connection", (ws) => {
           if (slot && slot.disconnected) {
             slot.ws = ws;
             slot.disconnected = false;
+            slot.hasState = false;
 
             clearTimeout(slot.disconnectTimer);
             slot.disconnectTimer = null;
@@ -489,11 +576,13 @@ wss.on("connection", (ws) => {
 
             for (const player of room.players) {
               if (player.id !== wanted) {
-                sendTo(player.ws, { type: "opponentReconnected" });
+                sendTo(player.ws, {
+                  type: "opponentReconnected",
+                  playerId: wanted
+                });
               }
             }
 
-            // Состояние просим у всех подключённых: ответит первый, у кого оно есть
             room.pendingStateFor = wanted;
 
             for (const player of room.players) {
@@ -502,6 +591,7 @@ wss.on("connection", (ws) => {
               }
             }
 
+            armStateFallback(room, wanted, message.roomCode);
             return;
           }
 
@@ -510,7 +600,7 @@ wss.on("connection", (ws) => {
           return;
         }
 
-        // 2) Пассив-место: заявка на передачу (хост подтверждает)
+        // 2) Пассив-место: заявка на передачу (хост подтверждает панелью)
         if (seat && seat.kind === "passive") {
           const guestId = room.nextGuestId++;
           room.guests.push({ ws, guestId, name, requestedSeat: wanted });
@@ -584,7 +674,7 @@ wss.on("connection", (ws) => {
         }
       }
 
-      room.players.push({ ws, id: newId, name, ready: false });
+      room.players.push({ ws, id: newId, name, ready: false, hasState: false });
 
       ws.roomCode = message.roomCode;
       ws.playerId = newId;
@@ -686,6 +776,10 @@ wss.on("connection", (ws) => {
       room.turn = 1;
       room.seats = room.players.map(p => ({ id: p.id, kind: "human" }));
 
+      for (const player of room.players) {
+        player.hasState = true;
+      }
+
       broadcastToRoom(room, {
         type: "gameStart",
         mapId: room.mapId,
@@ -737,7 +831,8 @@ wss.on("connection", (ws) => {
                 ws: guest.ws,
                 id: seatId,
                 name: guest.name,
-                ready: true
+                ready: true,
+                hasState: false
               });
             } else {
               // Гость отвалился: место становится пассивным
@@ -792,6 +887,12 @@ wss.on("connection", (ws) => {
       }
       room.turn = turn;
 
+      console.log(
+        `Реестр мест комнаты ${ws.roomCode}: ` +
+        seats.map(s => `${s.id}:${s.kind}`).join(", ") +
+        ` | устранены: [${eliminated.join(", ")}] | ход: ${turn}`
+      );
+
       broadcastToRoom(room, {
         type: "gameStart",
         mapId: room.mapId,
@@ -805,6 +906,10 @@ wss.on("connection", (ws) => {
         type: "fullState",
         state: room.saveData.state
       });
+
+      for (const player of players) {
+        player.hasState = true;
+      }
 
       armAutoTurn(room);
       console.log(`Возобновлённая игра стартовала в комнате ${ws.roomCode}`);
@@ -836,7 +941,8 @@ wss.on("connection", (ws) => {
         ws: guest.ws,
         id: seat.id,
         name: guest.name,
-        ready: true
+        ready: true,
+        hasState: false
       });
 
       guest.ws.roomCode = ws.roomCode;
@@ -850,7 +956,16 @@ wss.on("connection", (ws) => {
         mapId: room.mapId
       });
 
-      broadcastToRoom(room, { type: "playerReturned", playerId: seat.id });
+      // Реестр мест едет всем: клиенты держат его как истину
+      broadcastToRoom(room, {
+        type: "playerReturned",
+        playerId: seat.id,
+        seats: room.seats.slice()
+      });
+
+      console.log(
+        `Место ${seat.id} в комнате ${ws.roomCode} передано игроку ${guest.name}`
+      );
 
       clearTimeout(room.autoTimer);
       room.pendingStateFor = seat.id;
@@ -861,6 +976,7 @@ wss.on("connection", (ws) => {
         }
       }
 
+      armStateFallback(room, seat.id, ws.roomCode);
       return;
     }
 
@@ -941,6 +1057,7 @@ wss.on("connection", (ws) => {
 
       slot.ws = ws;
       slot.disconnected = false;
+      slot.hasState = false;
 
       clearTimeout(slot.disconnectTimer);
       slot.disconnectTimer = null;
@@ -956,7 +1073,10 @@ wss.on("connection", (ws) => {
 
       for (const player of room.players) {
         if (player.id !== message.playerId) {
-          sendTo(player.ws, { type: "opponentReconnected" });
+          sendTo(player.ws, {
+            type: "opponentReconnected",
+            playerId: message.playerId
+          });
         }
       }
 
@@ -970,6 +1090,7 @@ wss.on("connection", (ws) => {
         }
       }
 
+      armStateFallback(room, message.playerId, message.roomCode);
       return;
     }
 
@@ -990,6 +1111,10 @@ wss.on("connection", (ws) => {
         type: "fullState",
         state: message.state
       });
+
+      if (target) {
+        target.hasState = true;
+      }
 
       room.pendingStateFor = undefined;
       return;
@@ -1040,6 +1165,9 @@ wss.on("connection", (ws) => {
       if (ws.playerId !== room.turn) {
         return;
       }
+
+      // Действие от игрока — доказательство, что у него есть состояние
+      ws.hasState = true;
 
       const text = JSON.stringify(message);
       for (const player of room.players) {
@@ -1126,7 +1254,7 @@ wss.on("connection", (ws) => {
 
     for (const player of room.players) {
       if (player.id !== playerId) {
-        sendTo(player.ws, { type: "opponentDisconnected" });
+        sendTo(player.ws, { type: "opponentDisconnected", playerId });
       }
     }
 
