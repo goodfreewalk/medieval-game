@@ -41,9 +41,20 @@ let currentResumeLobby = false;
 let lastSeatDraft = {};
 let lastGuests = [];
 let lastSaveInfo = null;
+let lastBots = [];
 let players = [];
 let myReady = false;
 let onGameStartCallback = null;
+
+// Панель управления ботами (вставляется после списка игроков)
+const botControls = document.createElement("div");
+botControls.className = "menuRow";
+botControls.style.display = "none";
+
+const addAggressiveBtn = document.createElement("button");
+const addBalancedBtn = document.createElement("button");
+botControls.appendChild(addAggressiveBtn);
+botControls.appendChild(addBalancedBtn);
 
 // ---------- Карточки сохранённых партий (localStorage) ----------
 
@@ -120,7 +131,6 @@ function renderResumeCards() {
     button.className = "resumeCardButton";
 
     if (card.token) {
-      // Хост: открывает лобби возврата по ключу
       button.textContent = `${t("resumeHostCard")} · ${card.code}`;
       button.addEventListener("click", () => {
         const name = nickname.value.trim() || "Player";
@@ -133,7 +143,6 @@ function renderResumeCards() {
         });
       });
     } else {
-      // Игрок: входит в уже открытое хостом лобби возврата
       button.textContent =
         `${t("resumeJoinCard")} · ${card.code} · ${t("seatLabel")} ${card.seatId}`;
       button.addEventListener("click", () => {
@@ -215,12 +224,17 @@ function renderMapPreview(mapDef) {
   }
 }
 
+// Карта подбирается под полное число мест: люди + боты
+function totalSeats() {
+  return players.length + lastBots.length;
+}
+
 function availableMaps() {
   if (currentResumeLobby) {
     return [getMapById(currentMapId)];
   }
 
-  const count = players.length || 2;
+  const count = totalSeats() || 2;
   const list = MAPS.filter(map => map.players.includes(count));
   return list.length > 0 ? list : MAPS;
 }
@@ -236,7 +250,6 @@ function renderMapSelect() {
     }
   }
 
-  // В лобби возврата карта фиксирована сохранением
   const locked = currentResumeLobby;
   mapSelect.style.display = locked ? "none" : "";
   mapLabel.style.display = locked ? "none" : "";
@@ -267,7 +280,11 @@ function guestName(guestId) {
   return guest ? guest.name : "—";
 }
 
-// Лобби возврата: хост раздаёт места, гости ждут
+function botNameKey(personality) {
+  return personality === "aggressive" ? "botAggressive" : "botBalanced";
+}
+
+// Лобби возврата: хост раздаёт места (гости / пассив / бот / устранить)
 function renderResumeLobby() {
   lobbyTitle.textContent = t("lobbyTitle");
   roomCodeDisplay.textContent = `${t("roomLabel")}: ${currentRoomCode}`;
@@ -276,6 +293,7 @@ function renderResumeLobby() {
   renderMapSelect();
 
   readyBtn.style.display = "none";
+  botControls.style.display = "none";
   startBtn.style.display = isHost ? "" : "none";
   startBtn.textContent = t("startGame");
   startBtn.disabled = !isHost;
@@ -294,6 +312,8 @@ function renderResumeLobby() {
       statusText = t("seatPassive");
     } else if (draft.kind === "eliminate") {
       statusText = t("seatEliminate");
+    } else if (draft.kind === "bot") {
+      statusText = t(botNameKey(draft.personality));
     } else if (seat.id === 1) {
       const host = players.find(p => p.id === 1);
       statusText = `${t("seatHuman")}: ${host ? host.name : "—"}`;
@@ -306,7 +326,6 @@ function renderResumeLobby() {
     if (isHost && seat.id !== 1) {
       const select = document.createElement("select");
 
-      // Гости пула
       for (const guest of lastGuests) {
         const option = document.createElement("option");
         option.value = `guest:${guest.guestId}`;
@@ -319,20 +338,25 @@ function renderResumeLobby() {
       passiveOption.textContent = t("seatPassive");
       select.appendChild(passiveOption);
 
+      const aggressiveOption = document.createElement("option");
+      aggressiveOption.value = "bot:aggressive";
+      aggressiveOption.textContent = t("botAggressive");
+      select.appendChild(aggressiveOption);
+
+      const balancedOption = document.createElement("option");
+      balancedOption.value = "bot:balanced";
+      balancedOption.textContent = t("botBalanced");
+      select.appendChild(balancedOption);
+
       const eliminateOption = document.createElement("option");
       eliminateOption.value = "eliminate";
       eliminateOption.textContent = t("seatEliminate");
       select.appendChild(eliminateOption);
 
-      const botOption = document.createElement("option");
-      botOption.value = "bot";
-      botOption.textContent = t("seatBot");
-      botOption.disabled = true;
-      select.appendChild(botOption);
-
-      // Текущий выбор
       if (draft.kind === "human" && draft.guestId !== null) {
         select.value = `guest:${draft.guestId}`;
+      } else if (draft.kind === "bot") {
+        select.value = `bot:${draft.personality || "balanced"}`;
       } else {
         select.value = draft.kind;
       }
@@ -346,6 +370,13 @@ function renderResumeLobby() {
             seatId: seat.id,
             kind: "human",
             guestId: Number(value.slice(6))
+          });
+        } else if (value.startsWith("bot:")) {
+          sendMessage({
+            type: "setSeat",
+            seatId: seat.id,
+            kind: "bot",
+            personality: value.slice(4)
           });
         } else {
           sendMessage({
@@ -382,6 +413,7 @@ function renderResumeLobby() {
   lobbyStatus.textContent = isHost ? t("canStart") : t("resumeWaitingHost");
 }
 
+// Обычное лобби: люди + боты
 function renderLobby() {
   if (currentResumeLobby) {
     renderResumeLobby();
@@ -406,17 +438,43 @@ function renderLobby() {
     playerList.appendChild(li);
   }
 
+  // Боты комнаты
+  for (const bot of lastBots) {
+    const li = document.createElement("li");
+    li.textContent =
+      `${bot.id}. ${t(botNameKey(bot.personality))}`;
+
+    if (isHost) {
+      const remove = document.createElement("button");
+      remove.className = "resumeCardDelete";
+      remove.textContent = t("removeBot");
+      remove.addEventListener("click", () => {
+        sendMessage({ type: "removeBot", botId: bot.id });
+      });
+      li.appendChild(document.createTextNode(" "));
+      li.appendChild(remove);
+    }
+
+    playerList.appendChild(li);
+  }
+
+  // Панель добавления ботов — только хосту в обычном лобби
+  botControls.style.display =
+    isHost && players.length + lastBots.length < 4 ? "" : "none";
+  addAggressiveBtn.textContent = t("addBotAggressive");
+  addBalancedBtn.textContent = t("addBotBalanced");
+
   readyBtn.textContent = myReady ? t("cancelReady") : t("ready");
   startBtn.textContent = t("startGame");
   startBtn.style.display = isHost ? "" : "none";
 
-  const allReady =
-    players.length >= 2 && players.every(player => player.ready);
-  startBtn.disabled = !allReady;
+  const seats = totalSeats();
+  const allReady = players.every(player => player.ready);
+  startBtn.disabled = !(isHost && seats >= 2 && allReady);
 
-  if (players.length < 2) {
+  if (seats < 2) {
     lobbyStatus.textContent = t("waitingPlayers");
-  } else if (!players.every(player => player.ready)) {
+  } else if (!allReady) {
     lobbyStatus.textContent = t("waitingReady");
   } else if (!isHost) {
     lobbyStatus.textContent = t("waitingHost");
@@ -459,6 +517,7 @@ function handleNetworkMessage(message) {
     lastSeatDraft = message.seatDraft || {};
     lastGuests = message.guests || [];
     lastSaveInfo = message.saveInfo || null;
+    lastBots = message.bots || [];
 
     const me = players.find(player => player.id === myPlayerId);
     myReady = me ? me.ready : false;
@@ -521,6 +580,17 @@ export function getMyPlayerId() {
 
 export function initLobby(callbacks) {
   onGameStartCallback = callbacks.onGameStart;
+
+  // Панель ботов встаёт сразу после списка игроков
+  playerList.insertAdjacentElement("afterend", botControls);
+
+  addAggressiveBtn.addEventListener("click", () => {
+    sendMessage({ type: "addBot", personality: "aggressive" });
+  });
+
+  addBalancedBtn.addEventListener("click", () => {
+    sendMessage({ type: "addBot", personality: "balanced" });
+  });
 
   function applyTelegram() {
     const tg = window.Telegram.WebApp;
@@ -594,6 +664,7 @@ export function initLobby(callbacks) {
     currentRoomCode = "";
     currentResumeLobby = false;
     players = [];
+    lastBots = [];
     myReady = false;
 
     menuStatus.textContent = "";

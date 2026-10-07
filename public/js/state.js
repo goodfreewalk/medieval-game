@@ -45,7 +45,8 @@ export function initGame(canvas, ctx, options = {}) {
   state.canvas = canvas;
   state.ctx = ctx;
   state.map = parsed.terrain;
-  state.tileSize = canvas.width / parsed.size;
+  // На сервере canvas отсутствует (зеркало состояния) — размер клетки не нужен
+  state.tileSize = canvas ? canvas.width / parsed.size : 0;
 
   // Владельцы зданий: стартовые наборы отсутствующих игроков становятся нейтральными
   state.owners = new Map();

@@ -1,8 +1,22 @@
-const path = require("path");
-const fs = require("fs");
-const crypto = require("crypto");
-const express = require("express");
-const { WebSocketServer } = require("ws");
+import path from "path";
+import fs from "fs";
+import crypto from "crypto";
+import { fileURLToPath } from "url";
+import express from "express";
+import { WebSocketServer } from "ws";
+
+// Общая боевая логика с клиентом — единый источник правил
+import { state, initGame } from "../public/js/state.js";
+import {
+  applyMove,
+  applyAttack,
+  applyRecruit,
+  applyEndTurn,
+  eliminatePlayer
+} from "../public/js/logic.js";
+import { planBotAction } from "./bots.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 8080;
 const MAX_PLAYERS = 4;
@@ -15,6 +29,11 @@ fs.mkdirSync(SAVES_DIR, { recursive: true });
 
 // Пауза пассивного хода
 const AUTO_TURN_DELAY_MS = 4000;
+
+// Темп бота: первая пауза длиннее (человек успевает увидеть ход), шаги чаще
+const BOT_FIRST_STEP_MS = 900;
+const BOT_STEP_DELAY_MS = 500;
+const BOT_MAX_STEPS = 40;
 
 // Ожидание возврата отключившегося игрока
 const RECONNECT_GRACE_MS = 60000;
@@ -46,12 +65,15 @@ console.log("WebSocket готов");
 // Комната: {
 //   players: [{ ws, id, name, ready, disconnected, disconnectTimer, hasState }],
 //   guests: [{ ws, guestId, name, requestedSeat }],
+//   lobbyBots: [{ id, personality }] (боты обычного лобби),
 //   phase: "lobby" | "game",
 //   resumeLobby: bool,
 //   saveData: объект сохранения,
-//   seatDraft: { seatId: { kind, guestId } },
-//   seats: [{ id, kind: "human" | "passive" }],
-//   mapId, turn, autoTimer, pendingStateFor, nextGuestId, gameOverNotified
+//   seatDraft: { seatId: { kind, guestId, personality } },
+//   seats: [{ id, kind: "human" | "passive" | "bot", personality }],
+//   mirror: снапшот состояния (формат fullState),
+//   mapId, turn, autoTimer, botSteps, pendingStateFor,
+//   nextGuestId, gameOverNotified
 // }
 const rooms = new Map();
 
@@ -108,6 +130,52 @@ function readSave(code) {
   }
 }
 
+// ---------- Зеркало состояния ----------
+
+function loadMirror(room) {
+  const m = room.mirror;
+  state.map = m.map;
+  state.units = m.units;
+  state.owners = new Map(m.owners);
+  state.players = m.players;
+  state.currentPlayer = m.currentPlayer;
+  state.eliminated = new Set(m.eliminated);
+  state.seatKinds = m.seatKinds;
+  state.gameOver = m.gameOver;
+  state.winner = m.winner;
+}
+
+function saveMirror(room) {
+  room.mirror = {
+    map: state.map,
+    units: state.units,
+    owners: Array.from(state.owners.entries()),
+    players: state.players,
+    currentPlayer: state.currentPlayer,
+    eliminated: Array.from(state.eliminated),
+    seatKinds: state.seatKinds,
+    gameOver: state.gameOver,
+    winner: state.winner
+  };
+}
+
+// Применяем действие к зеркалу той же логикой, что и у клиентов
+function applyActionToMirror(room, action) {
+  loadMirror(room);
+
+  if (action.kind === "move") {
+    applyMove(action.unitId, action.x, action.y);
+  } else if (action.kind === "attack") {
+    applyAttack(action.attackerId, action.targetId);
+  } else if (action.kind === "recruit") {
+    applyRecruit(action.type, action.x, action.y);
+  } else if (action.kind === "endTurn") {
+    applyEndTurn();
+  }
+
+  saveMirror(room);
+}
+
 // ---------- Вспомогательные ----------
 
 function getRoom(ws) {
@@ -155,6 +223,7 @@ function sendRoomUpdate(room) {
     mapId: room.mapId,
     resumeLobby: !!room.resumeLobby,
     seatDraft: room.seatDraft || null,
+    bots: room.lobbyBots || null,
     saveInfo: room.saveData
       ? { seats: room.saveData.players, turn: room.saveData.turn }
       : null,
@@ -190,38 +259,84 @@ function seatKind(room, id) {
   return seat ? seat.kind : null;
 }
 
-// Серверный пропуск хода пассивного места
-function armAutoTurn(room) {
+// ---------- Драйвер автоматических мест (пассив и боты) ----------
+
+function armTurnDriver(room) {
   clearTimeout(room.autoTimer);
   room.autoTimer = null;
 
-  if (room.phase !== "game") {
+  if (room.phase !== "game" || !room.mirror) {
     return;
   }
 
-  if (seatKind(room, room.turn) !== "passive") {
+  const kind = seatKind(room, room.turn);
+
+  // Пассив: сервер сам пропускает ход
+  if (kind === "passive") {
+    room.autoTimer = setTimeout(() => {
+      if (room.phase !== "game" || seatKind(room, room.turn) !== "passive") {
+        return;
+      }
+
+      const action = { kind: "endTurn" };
+      applyActionToMirror(room, action);
+      action.next = room.mirror.currentPlayer;
+
+      broadcastToRoom(room, { type: "gameAction", action });
+      room.turn = action.next;
+      armTurnDriver(room);
+    }, AUTO_TURN_DELAY_MS);
     return;
   }
 
-  room.autoTimer = setTimeout(() => {
-    if (room.phase !== "game" || seatKind(room, room.turn) !== "passive") {
-      return;
-    }
-
-    broadcastToRoom(room, {
-      type: "autoEndTurn",
-      playerId: room.turn
-    });
-
-    room.turn = nextSeat(room, room.turn);
-    armAutoTurn(room);
-  }, AUTO_TURN_DELAY_MS);
+  // Бот: серия шагов с паузами
+  if (kind === "bot") {
+    room.botSteps = 0;
+    room.autoTimer = setTimeout(() => botStep(room), BOT_FIRST_STEP_MS);
+  }
 }
 
-// Резерв синхронизации: если за STATE_FALLBACK_MS никто из соперников
-// не прислал состояние, пробуем сейв комнаты (резюм) или сейв на диске.
-// Если источника нет совсем — освобождаем слот, чтобы зомби-сокет
-// не блокировал резюм и вход по карточке.
+function botStep(room) {
+  if (room.phase !== "game" || !room.mirror) {
+    return;
+  }
+
+  if (seatKind(room, room.turn) !== "bot") {
+    return;
+  }
+
+  loadMirror(room);
+
+  if (state.gameOver || state.currentPlayer !== room.turn) {
+    saveMirror(room);
+    return;
+  }
+
+  const seat = room.seats.find(s => s.id === room.turn);
+  const action = room.botSteps < BOT_MAX_STEPS
+    ? planBotAction(state, seat.personality || "balanced")
+    : null;
+
+  if (action) {
+    room.botSteps += 1;
+    applyActionToMirror(room, action);
+    broadcastToRoom(room, { type: "gameAction", action });
+    room.autoTimer = setTimeout(() => botStep(room), BOT_STEP_DELAY_MS);
+    return;
+  }
+
+  // Делать больше нечего — завершаем ход
+  const endAction = { kind: "endTurn" };
+  applyActionToMirror(room, endAction);
+  endAction.next = room.mirror.currentPlayer;
+
+  broadcastToRoom(room, { type: "gameAction", action: endAction });
+  room.turn = endAction.next;
+  armTurnDriver(room);
+}
+
+// ---------- Резерв синхронизации состояния ----------
+
 function armStateFallback(room, targetId, code) {
   setTimeout(() => {
     if (room.pendingStateFor !== targetId) {
@@ -235,20 +350,27 @@ function armStateFallback(room, targetId, code) {
       return;
     }
 
-    let state = room.saveData ? room.saveData.state : null;
+    // Источники по приоритету: живое зеркало → сейв резюма → сейв на диске
+    let fallback = room.mirror || null;
 
-    if (!state) {
+    if (!fallback && room.saveData) {
+      fallback = room.saveData.state;
+    }
+
+    if (!fallback) {
       const { save } = readSave(code);
       if (save) {
-        state = save.state;
+        fallback = save.state;
       }
     }
 
-    if (state) {
+    if (fallback) {
       slot.hasState = true;
-      sendTo(slot.ws, { type: "fullState", state });
-      console.log(`Состояние для места ${targetId} восстановлено из сохранения`);
+      sendTo(slot.ws, { type: "fullState", state: fallback });
+      console.log(`Состояние для места ${targetId} восстановлено из резерва`);
     } else {
+      // Источника нет совсем: освобождаем слот, чтобы зомби-сокет
+      // не блокировал резюм и вход по карточке
       const wsTarget = slot.ws;
       slot.disconnected = true;
       slot.ws = null;
@@ -259,7 +381,8 @@ function armStateFallback(room, targetId, code) {
   }, STATE_FALLBACK_MS);
 }
 
-// Устранение места: бой, grace-дисконнект, выход, решение хоста
+// ---------- Устранения ----------
+
 function eliminateSeat(room, code, playerId) {
   const slot = room.players.find(p => p.id === playerId);
   if (slot) {
@@ -274,13 +397,19 @@ function eliminateSeat(room, code, playerId) {
     room.turn = nextSeat(room, playerId);
   }
 
+  if (room.mirror) {
+    loadMirror(room);
+    eliminatePlayer(playerId, room.turn);
+    saveMirror(room);
+  }
+
   broadcastToRoom(room, {
     type: "playerEliminated",
     playerId,
     nextTurn: room.turn
   });
 
-  armAutoTurn(room);
+  armTurnDriver(room);
 
   if (room.players.length === 0 && (room.guests || []).length === 0) {
     rooms.delete(code);
@@ -289,6 +418,8 @@ function eliminateSeat(room, code, playerId) {
     console.log(`Игрок ${playerId} устранён в комнате ${code}, ход: ${room.turn}`);
   }
 }
+
+// ---------- Heartbeat ----------
 
 const heartbeatInterval = setInterval(() => {
   for (const ws of wss.clients) {
@@ -339,6 +470,7 @@ wss.on("connection", (ws) => {
       const room = {
         players: [],
         guests: [],
+        lobbyBots: [],
         phase: "lobby",
         resumeLobby: false,
         turn: 1,
@@ -369,6 +501,54 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // ---------- Боты в новом лобби (только хост) ----------
+    if (message.type === "addBot") {
+      const room = getRoom(ws);
+      if (!room || room.phase !== "lobby" || room.resumeLobby) {
+        return;
+      }
+      if (ws.playerId !== 1) {
+        return;
+      }
+      if (room.players.length + room.lobbyBots.length >= MAX_PLAYERS) {
+        return;
+      }
+
+      const personality =
+        message.personality === "aggressive" ? "aggressive" : "balanced";
+
+      const usedIds = [
+        ...room.players.map(p => p.id),
+        ...room.lobbyBots.map(b => b.id)
+      ];
+      let newId = null;
+      for (let id = 1; id <= MAX_PLAYERS; id++) {
+        if (!usedIds.includes(id)) {
+          newId = id;
+          break;
+        }
+      }
+
+      room.lobbyBots.push({ id: newId, personality });
+      sendRoomUpdate(room);
+      console.log(`Бот ${newId} (${personality}) добавлен в комнату ${ws.roomCode}`);
+      return;
+    }
+
+    if (message.type === "removeBot") {
+      const room = getRoom(ws);
+      if (!room || room.phase !== "lobby" || room.resumeLobby) {
+        return;
+      }
+      if (ws.playerId !== 1) {
+        return;
+      }
+
+      room.lobbyBots = room.lobbyBots.filter(b => b.id !== message.botId);
+      sendRoomUpdate(room);
+      return;
+    }
+
     // ---------- Сохранение партии (только хост, только в игре) ----------
     if (message.type === "saveGame") {
       const room = getRoom(ws);
@@ -388,10 +568,12 @@ wss.on("connection", (ws) => {
           return {
             id: s.id,
             kind: s.kind,
+            personality: s.personality || null,
             name: human ? human.name : null
           };
         }),
-        state: message.state,
+        // Зеркало сервера — самый свежий источник состояния
+        state: room.mirror || message.state,
         token
       };
 
@@ -443,11 +625,7 @@ wss.on("connection", (ws) => {
             ws.roomCode = code;
             ws.playerId = 1;
 
-            sendTo(ws, {
-              type: "rejoinOk",
-              playerId: 1,
-              roomCode: code
-            });
+            sendTo(ws, { type: "rejoinOk", playerId: 1, roomCode: code });
 
             for (const player of existing.players) {
               if (player.id !== 1) {
@@ -491,6 +669,7 @@ wss.on("connection", (ws) => {
       const room = {
         players: [],
         guests: [],
+        lobbyBots: [],
         phase: "lobby",
         resumeLobby: true,
         saveData: save,
@@ -501,10 +680,17 @@ wss.on("connection", (ws) => {
       };
 
       for (const seat of save.players) {
-        room.seatDraft[seat.id] =
-          seat.id === 1
-            ? { kind: "human", guestId: null }
-            : { kind: "passive", guestId: null };
+        if (seat.id === 1) {
+          room.seatDraft[seat.id] = { kind: "human", guestId: null };
+        } else if (seat.kind === "bot") {
+          room.seatDraft[seat.id] = {
+            kind: "bot",
+            personality: seat.personality || "balanced",
+            guestId: null
+          };
+        } else {
+          room.seatDraft[seat.id] = { kind: "passive", guestId: null };
+        }
       }
 
       rooms.set(code, room);
@@ -619,7 +805,7 @@ wss.on("connection", (ws) => {
           return;
         }
 
-        // 3) Места нет (устранено) — войти нельзя
+        // 3) Места нет (устранено или бот) — войти нельзя
         sendTo(ws, { type: "error", code: "roomFull" });
         return;
       }
@@ -734,11 +920,18 @@ wss.on("connection", (ws) => {
       if (!room.seatDraft[seatId] || seatId === 1) {
         return;
       }
-      if (kind !== "human" && kind !== "passive" && kind !== "eliminate") {
+      if (
+        kind !== "human" &&
+        kind !== "passive" &&
+        kind !== "eliminate" &&
+        kind !== "bot"
+      ) {
         return;
       }
 
       const guestId = kind === "human" ? message.guestId : null;
+      const personality =
+        message.personality === "aggressive" ? "aggressive" : "balanced";
 
       // Освобождаем гостя, если он был назначен куда-то ещё
       if (guestId !== null) {
@@ -751,12 +944,15 @@ wss.on("connection", (ws) => {
         }
       }
 
-      room.seatDraft[seatId] = { kind, guestId };
+      room.seatDraft[seatId] =
+        kind === "bot"
+          ? { kind: "bot", personality, guestId: null }
+          : { kind, guestId };
       sendRoomUpdate(room);
       return;
     }
 
-    // ---------- Старт обычной игры ----------
+    // ---------- Старт обычной игры (с ботами) ----------
     if (message.type === "startGame") {
       const room = getRoom(ws);
       if (!room || room.resumeLobby) {
@@ -765,7 +961,17 @@ wss.on("connection", (ws) => {
       if (ws.playerId !== 1) {
         return;
       }
-      if (room.players.length < 2 || room.players.length > MAX_PLAYERS) {
+
+      const seats = [
+        ...room.players.map(p => ({ id: p.id, kind: "human" })),
+        ...room.lobbyBots.map(b => ({
+          id: b.id,
+          kind: "bot",
+          personality: b.personality
+        }))
+      ];
+
+      if (seats.length < 2 || seats.length > MAX_PLAYERS) {
         return;
       }
       if (!room.players.every(p => p.ready)) {
@@ -774,7 +980,18 @@ wss.on("connection", (ws) => {
 
       room.phase = "game";
       room.turn = 1;
-      room.seats = room.players.map(p => ({ id: p.id, kind: "human" }));
+      room.seats = seats;
+
+      // Зеркало: та же инициализация, что и у клиентов
+      initGame(null, null, {
+        mapId: room.mapId,
+        seats: seats.map(s => s.id)
+      });
+      state.seatKinds = {};
+      for (const seat of seats) {
+        state.seatKinds[seat.id] = seat.kind;
+      }
+      saveMirror(room);
 
       for (const player of room.players) {
         player.hasState = true;
@@ -783,12 +1000,15 @@ wss.on("connection", (ws) => {
       broadcastToRoom(room, {
         type: "gameStart",
         mapId: room.mapId,
-        seats: room.seats.slice(),
+        seats: seats.slice(),
         eliminated: [],
         turn: 1
       });
-      armAutoTurn(room);
-      console.log(`Игра началась в комнате ${ws.roomCode}`);
+      armTurnDriver(room);
+      console.log(
+        `Игра началась в комнате ${ws.roomCode}: ` +
+        seats.map(s => `${s.id}:${s.kind}`).join(", ")
+      );
       return;
     }
 
@@ -815,12 +1035,15 @@ wss.on("connection", (ws) => {
           continue;
         }
 
-        seats.push({ id: seatId, kind: draft.kind });
+        seats.push({
+          id: seatId,
+          kind: draft.kind,
+          personality: draft.personality || null
+        });
 
         if (draft.kind === "human") {
           if (seatId === 1) {
-            const host = room.players.find(p => p.id === 1);
-            players.push(host);
+            players.push(room.players.find(p => p.id === 1));
           } else {
             const guest = (room.guests || []).find(
               g => g.guestId === draft.guestId
@@ -837,6 +1060,7 @@ wss.on("connection", (ws) => {
             } else {
               // Гость отвалился: место становится пассивным
               seats[seats.length - 1].kind = "passive";
+              seats[seats.length - 1].personality = null;
             }
           }
         }
@@ -887,6 +1111,18 @@ wss.on("connection", (ws) => {
       }
       room.turn = turn;
 
+      // Зеркало из сейва + устранения и свежие виды мест
+      room.mirror = room.saveData.state;
+      loadMirror(room);
+      for (const id of eliminated) {
+        eliminatePlayer(id, id === state.currentPlayer ? turn : null);
+      }
+      state.seatKinds = {};
+      for (const seat of seats) {
+        state.seatKinds[seat.id] = seat.kind;
+      }
+      saveMirror(room);
+
       console.log(
         `Реестр мест комнаты ${ws.roomCode}: ` +
         seats.map(s => `${s.id}:${s.kind}`).join(", ") +
@@ -904,14 +1140,14 @@ wss.on("connection", (ws) => {
 
       broadcastToRoom(room, {
         type: "fullState",
-        state: room.saveData.state
+        state: room.mirror
       });
 
       for (const player of players) {
         player.hasState = true;
       }
 
-      armAutoTurn(room);
+      armTurnDriver(room);
       console.log(`Возобновлённая игра стартовала в комнате ${ws.roomCode}`);
       return;
     }
@@ -935,6 +1171,7 @@ wss.on("connection", (ws) => {
       }
 
       seat.kind = "human";
+      seat.personality = null;
       room.guests = room.guests.filter(g => g !== guest);
 
       room.players.push({
@@ -963,9 +1200,11 @@ wss.on("connection", (ws) => {
         seats: room.seats.slice()
       });
 
-      console.log(
-        `Место ${seat.id} в комнате ${ws.roomCode} передано игроку ${guest.name}`
-      );
+      if (room.mirror) {
+        loadMirror(room);
+        state.seatKinds[seat.id] = "human";
+        saveMirror(room);
+      }
 
       clearTimeout(room.autoTimer);
       room.pendingStateFor = seat.id;
@@ -1181,20 +1420,12 @@ wss.on("connection", (ws) => {
         }
       }
 
+      // Зеркало применяет то же действие — сервер всегда в актуальном состоянии
+      applyActionToMirror(room, message.action);
+
       if (message.action && message.action.kind === "endTurn") {
-        const expected = nextSeat(room, room.turn);
-        const next = message.action.next;
-
-        if (
-          Number.isInteger(next) &&
-          (room.seats || []).some(s => s.id === next)
-        ) {
-          room.turn = next;
-        } else {
-          room.turn = expected;
-        }
-
-        armAutoTurn(room);
+        room.turn = room.mirror.currentPlayer;
+        armTurnDriver(room);
       }
       return;
     }

@@ -185,6 +185,10 @@ function updateTurnInfo() {
     // Пассивное место: ход ведёт сервер
     turnInfo.textContent =
       `${t("seatLabel")} ${state.currentPlayer} — ${t("seatPassive")}`;
+  } else if (kind === "bot") {
+    // Место под управлением серверного бота
+    turnInfo.textContent =
+      `${t("seatLabel")} ${state.currentPlayer} — ${t("seatBot")}`;
   } else {
     turnInfo.textContent = `${t("turn")}: ${state.currentPlayer}`;
   }
