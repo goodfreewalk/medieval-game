@@ -1,479 +1,19 @@
+/* ================= БАЗА ================= */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
 body {
   margin: 0;
-  min-height: 100vh;
-  display: flex;
-  justify-content: flex-start;
-  align-items: flex-start;
-  background-color: #222;
-  color: white;
-  font-family: Arial, sans-serif;
-}
-
-.app {
-  margin: auto;
-  text-align: center;
-}
-
-h1 {
-  font-size: 22px;
-  margin-bottom: 12px;
-}
-
-#topBar {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-#turnInfo {
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 14px;
-  color: white;
-  background-color: #333;
-}
-
-#endTurn {
-  padding: 8px 14px;
-  font-size: 14px;
-  background-color: #4a7cff;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-#endTurn:hover {
-  background-color: #3860d0;
-}
-
-#endTurn:disabled {
-  background-color: #555;
-  color: #aaa;
-  cursor: not-allowed;
-}
-
-#resources {
-  display: inline-block;
-  margin-bottom: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 14px;
-  color: white;
-  background-color: #333;
-}
-
-#recruitPanel {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin-bottom: 12px;
-  min-height: 36px;
-}
-
-.recruitButton {
-  padding: 8px 10px;
-  font-size: 13px;
-  background-color: #3d8b40;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.recruitButton:hover:not(:disabled) {
-  background-color: #2f6d32;
-}
-
-.recruitButton:disabled {
-  background-color: #555;
-  color: #aaa;
-  cursor: not-allowed;
-}
-
-#lang {
-  margin-bottom: 12px;
-  padding: 6px 10px;
-  font-size: 14px;
-  background-color: #333;
-  color: #ffffff;
-  border: 1px solid #555;
-  border-radius: 6px;
-}
-
-canvas {
-  display: block;
-  background-color: #7bb546;
-  touch-action: none;
-}
-
-#info {
-  margin: 8px 0 0 0;
-  font-size: 14px;
-  color: #dddddd;
-}
-
-/* Таймер */
-#timer {
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 14px;
-  color: white;
-  background-color: #333;
-  min-width: 50px;
-  text-align: center;
-}
-
-#timer.warning {
-  background-color: #c0392b;
-}
-
-/* Экраны */
-.hidden {
-  display: none !important;
-}
-
-#menuScreen,
-#lobbyScreen {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.menuBox {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 260px;
-}
-
-#nickname,
-#roomCodeInput {
-  padding: 10px;
-  font-size: 14px;
-  border-radius: 8px;
-  border: 1px solid #555;
-  background-color: #333;
-  color: #ffffff;
-  text-align: center;
-}
-
-#roomCodeInput {
-  width: 90px;
-  text-transform: uppercase;
-}
-
-.menuRow {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-}
-
-#createRoomBtn,
-#joinRoomBtn,
-#readyBtn,
-#startBtn {
-  padding: 10px 14px;
-  font-size: 14px;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  background-color: #4a7cff;
-  color: #ffffff;
-}
-
-#readyBtn {
-  background-color: #3d8b40;
-}
-
-#startBtn {
-  background-color: #b8860b;
-}
-
-#leaveRoomBtn {
-  padding: 10px 14px;
-  font-size: 14px;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  background-color: #8a8a8a;
-  color: #ffffff;
-}
-
-#startBtn:disabled {
-  background-color: #555;
-  color: #aaa;
-  cursor: not-allowed;
-}
-
-#menuStatus {
-  min-height: 18px;
-  font-size: 13px;
-  color: #ffb0b0;
-}
-
-#lobbyStatus {
-  min-height: 18px;
-  font-size: 13px;
-  color: #dddddd;
-}
-
-#roomCodeDisplay {
-  font-size: 26px;
-  letter-spacing: 4px;
-  font-weight: bold;
-  color: #ffd76a;
-}
-
-#playerList {
-  list-style: none;
   padding: 0;
-  margin: 0 0 12px 0;
-  font-size: 15px;
-  line-height: 1.8;
-}
-
-/* Оверлей завершения игры */
-#gameOverOverlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.75);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 100;
 }
 
-.overlay-content {
-  background: #333;
-  padding: 40px;
-  border-radius: 16px;
-  text-align: center;
-  border: 2px solid #555;
-}
-
-.overlay-content h2 {
-  margin: 0 0 12px 0;
-  font-size: 28px;
-}
-
-#gameOverReason {
-  margin: 0 0 20px 0;
-  font-size: 15px;
-  color: #dddddd;
-}
-
-#playAgainBtn {
-  padding: 12px 24px;
-  font-size: 16px;
-  background-color: #4a7cff;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-#playAgainBtn:hover {
-  background-color: #3860d0;
-}
-
-/* Контейнер карты: квадрат, вписанный в экран, UI всегда виден */
-#gameContainer {
-  position: relative;
-  width: min(1000px, max(280px, min(92vw, calc(100vh - 230px))));
-  aspect-ratio: 1 / 1;
-  overflow: hidden;
-  background-color: #2a2a2a;
-  border: 2px solid #111;
-  border-radius: 8px;
-  touch-action: none;
-  margin: 0 auto 8px auto;
-}
-
-#game {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 1280px;
-  height: 1280px;
-  transform-origin: 0 0;
-  touch-action: none;
-  cursor: grab;
-}
-
-#game:active {
-  cursor: grabbing;
-}
-
-/* Альбомная ориентация: карта слева, панели справа */
-@media (orientation: landscape) {
-  #gameScreen {
-    display: grid;
-    grid-template-columns: auto 300px;
-    gap: 12px;
-    justify-content: center;
-    align-items: start;
-  }
-
-  #gameContainer {
-    grid-column: 1;
-    grid-row: 1 / span 5;
-    width: min(1000px, max(280px, min(calc(100vh - 48px), calc(100vw - 330px))));
-    margin: 0;
-  }
-
-  #lang {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: center;
-    margin-bottom: 0;
-  }
-
-  #topBar {
-    grid-column: 2;
-    grid-row: 2;
-    flex-wrap: wrap;
-    margin-bottom: 0;
-  }
-
-  #resources {
-    grid-column: 2;
-    grid-row: 3;
-    margin-bottom: 0;
-  }
-
-  #recruitPanel {
-    grid-column: 2;
-    grid-row: 4;
-    margin-bottom: 0;
-  }
-
-  #info {
-    grid-column: 2;
-    grid-row: 5;
-    margin: 0;
-  }
-}
-
-/* Строки описания юнитов над кнопками найма */
-.recruitInfoRow {
-  width: 100%;
-  font-size: 13px;
-  color: #dddddd;
-  line-height: 1.6;
-  text-align: center;
-}
-
-/* Строка найма: кнопка + характеристики в одну линию */
-.recruitRow {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  margin-bottom: 4px;
-  white-space: nowrap;
-}
-
-.recruitStats {
-  font-size: 13px;
-  color: #dddddd;
-}
-
-#netStatus {
-  position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 5;
-  padding: 4px 10px;
-  border-radius: 8px;
-  background-color: rgba(0, 0, 0, 0.65);
-  font-size: 13px;
-  color: #ffd76a;
-  pointer-events: none;
-}
-
-#netStatus:empty {
-  display: none;
-}
-
-#mapPreview {
-  display: block;
-  margin: 0 auto 6px auto;
-  background-color: #2a2a2a;
-  border: 2px solid #111;
-  border-radius: 8px;
-  image-rendering: pixelated;
-}
-
-#mapInfo {
-  margin-bottom: 8px;
-  font-size: 13px;
-  color: #dddddd;
-}
-
-/* Карточки сохранённых партий в меню */
-#resumeCards {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 260px;
-  margin: 0 auto 12px auto;
-}
-
-.resumeCard {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px;
-  background-color: #333;
-  border: 1px solid #555;
-  border-radius: 8px;
-}
-
-.resumeCardButton {
-  flex: 1;
-  padding: 8px 10px;
-  font-size: 13px;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  background-color: #6a5acd;
-  color: #ffffff;
-}
-
-.resumeCardDelete {
-  padding: 8px 10px;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  background-color: #555;
-  color: #ffffff;
-}
-
-/* Селекты рассадки в лобби возврата */
-#playerList select {
-  margin-left: 8px;
-  padding: 4px 6px;
-  font-size: 13px;
-  background-color: #333;
-  color: #ffffff;
-  border: 1px solid #555;
-  border-radius: 6px;
-}
-
-/* ================= РЕДИЗАЙН ================= */
-
-/* Фон: глубокий градиент с тёплыми «факельными» засветками */
 body {
+  font-family: "Segoe UI", Roboto, Arial, sans-serif;
+  color: #eeeeee;
   background:
     radial-gradient(1200px 600px at 20% -10%, rgba(212, 162, 78, 0.10), transparent 60%),
     radial-gradient(1000px 500px at 90% 110%, rgba(74, 124, 255, 0.10), transparent 60%),
@@ -481,37 +21,28 @@ body {
   background-attachment: fixed;
 }
 
-/* Меню и лобби — «карточки» с размытием */
-#menuScreen,
-#lobbyScreen {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  width: min(440px, 92vw);
-  margin: 24px auto;
-  padding: 28px 24px;
-  background: rgba(18, 18, 28, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 16px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(6px);
+.hidden {
+  display: none !important;
 }
 
-/* Заголовки с золотым градиентом */
-#menuTitle,
-#lobbyTitle {
-  margin: 0;
-  font-size: 32px;
-  letter-spacing: 1px;
-  background: linear-gradient(180deg, #f4d58d, #d4a24e 60%, #a97b2f);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  text-shadow: 0 2px 12px rgba(212, 162, 78, 0.25);
+.app {
+  min-height: 100%;
 }
 
-/* Все кнопки: объёмные, с нажатием */
+/* Язык: в меню/лобби сверху по центру, в игре его переставляет JS-раскладка */
+#lang {
+  display: block;
+  margin: 10px auto;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  color: #eeeeee;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+/* ================= КНОПКИ / ПОЛЯ ================= */
+
 button {
   border: none;
   border-radius: 10px;
@@ -543,7 +74,6 @@ button:disabled {
   transform: none;
 }
 
-/* Золотые кнопки главных действий */
 #createRoomBtn,
 #startBtn,
 .resumeCardButton {
@@ -558,22 +88,25 @@ button:disabled {
   box-shadow: 0 1px 0 #8a6516, 0 3px 8px rgba(0, 0, 0, 0.35);
 }
 
-/* Зелёная кнопка готовности */
 #readyBtn {
   background: linear-gradient(180deg, #46a758, #2f7e3f);
   box-shadow: 0 3px 0 #1d5427, 0 6px 14px rgba(0, 0, 0, 0.35);
 }
 
-/* Серые второстепенные */
 #leaveRoomBtn,
-.resumeCardDelete {
+.resumeCardDelete,
+#leaveGameBtn,
+.recruitClose {
   background: linear-gradient(180deg, #5a5a68, #44444f);
   box-shadow: 0 3px 0 #2e2e36, 0 6px 14px rgba(0, 0, 0, 0.35);
 }
 
-/* Поля ввода и селекты */
-#nickname,
-#roomCodeInput,
+#leaveGameBtn.danger {
+  background: linear-gradient(180deg, #e5484d, #b3272e);
+  box-shadow: 0 3px 0 #7d1a20, 0 6px 14px rgba(0, 0, 0, 0.35);
+}
+
+input,
 select {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.15);
@@ -583,8 +116,7 @@ select {
   font-size: 14px;
 }
 
-#nickname:focus,
-#roomCodeInput:focus,
+input:focus,
 select:focus {
   outline: none;
   border-color: rgba(212, 162, 78, 0.6);
@@ -594,11 +126,82 @@ select:focus {
   display: flex;
   gap: 8px;
   justify-content: center;
+  align-items: center;
   flex-wrap: wrap;
   width: 100%;
 }
 
-/* Списки игроков и статусы */
+/* ================= МЕНЮ / ЛОББИ ================= */
+
+#menuScreen,
+#lobbyScreen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(440px, 92vw);
+  margin: 24px auto;
+  padding: 28px 24px;
+  background: rgba(18, 18, 28, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+#menuTitle,
+#lobbyTitle {
+  margin: 0;
+  font-size: 32px;
+  letter-spacing: 1px;
+  background: linear-gradient(180deg, #f4d58d, #d4a24e 60%, #a97b2f);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 2px 12px rgba(212, 162, 78, 0.25);
+}
+
+.menuBox {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+}
+
+#nickname {
+  width: 100%;
+  text-align: center;
+}
+
+#roomCodeInput {
+  width: 110px;
+  text-transform: uppercase;
+}
+
+#menuStatus,
+#lobbyStatus {
+  min-height: 18px;
+  font-size: 13px;
+  color: #ff8a8d;
+  text-align: center;
+}
+
+#roomCodeDisplay {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: #f4d58d;
+}
+
+#playersLabel {
+  margin: 4px 0 0 0;
+  font-size: 14px;
+  color: #9a9aa5;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
 #playerList {
   list-style: none;
   padding: 0;
@@ -617,42 +220,122 @@ select:focus {
   font-size: 14px;
 }
 
-#menuStatus,
-#lobbyStatus {
-  min-height: 18px;
+#playerList select {
+  margin-left: 8px;
+  padding: 4px 6px;
   font-size: 13px;
-  color: #ff8a8d;
 }
 
-/* ---------- Правая панель игры ---------- */
-
-/* Кнопка сохранения: под языком, по центру, как «Завершить ход» */
-#saveGameBtn {
+#mapPreview {
   display: block;
-  margin: 8px auto;
+  margin: 0 auto 6px auto;
+  background-color: #2a2a2a;
+  border: 2px solid #111;
+  border-radius: 8px;
+  image-rendering: pixelated;
 }
 
-#topBar,
-#recruitPanel,
-#info {
+#mapInfo {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #dddddd;
+  text-align: center;
+}
+
+/* Карточки сохранённых партий */
+#resumeCards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.resumeCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px;
+  background-color: #333;
+  border: 1px solid #555;
+  border-radius: 8px;
+}
+
+.resumeCardButton {
+  flex: 1;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.resumeCardDelete {
+  padding: 8px 10px;
+}
+
+/* ================= ИГРА: ПОЛНЫЙ ЭКРАН + HUD ================= */
+
+#gameScreen {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #0f0f16;
+}
+
+#gameContainer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+}
+
+#gameContainer.dragging {
+  cursor: grabbing;
+}
+
+/* Canvas растягивается НЕ стилями: его размер выставляет JS.
+   Здесь только позиционирование */
+#game {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+}
+
+/* Верхняя панель хода */
+#topBar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: calc(100vw - 120px);
   background: rgba(20, 20, 30, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 8px 10px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-}
-
-#topBar {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+}
+
+#topBar button {
+  padding: 10px 14px;
+  font-size: 14px;
+  min-width: 148px;
+  text-align: center;
+}
+
+.menuGroup {
+  display: flex;
+  gap: 8px;
+  margin-left: 16px;
 }
 
 #turnInfo {
   font-weight: 700;
   font-size: 15px;
+  padding: 6px 10px;
 }
 
 #timer {
@@ -668,15 +351,49 @@ select:focus {
   color: #ff8a8d;
 }
 
-/* Ресурсы: три карточки */
+#endTurn {
+  background: linear-gradient(180deg, #46a758, #2f7e3f);
+  box-shadow: 0 3px 0 #1d5427, 0 6px 14px rgba(0, 0, 0, 0.35);
+}
+
+#endTurn:active {
+  box-shadow: 0 1px 0 #1d5427, 0 3px 8px rgba(0, 0, 0, 0.35);
+}
+
+#endTurn:disabled {
+  background: #4a4a55;
+  box-shadow: 0 3px 0 #33333c;
+  color: #9a9aa5;
+}
+
+#saveGameBtn {
+  background: linear-gradient(180deg, #e8bd6a, #c9962e);
+  box-shadow: 0 3px 0 #8a6516, 0 6px 14px rgba(0, 0, 0, 0.35);
+  color: #241a05;
+}
+
+#saveGameBtn:active {
+  box-shadow: 0 1px 0 #8a6516, 0 3px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* Язык в игре — правый верхний угол */
+#gameScreen #lang {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  margin: 0;
+}
+
+/* Ресурсы — левый верхний угол */
 #resources {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 5;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(56px, auto));
   gap: 8px;
-  background: none;
-  border: none;
-  padding: 0;
-  box-shadow: none;
 }
 
 .statCard {
@@ -687,7 +404,7 @@ select:focus {
   background: rgba(20, 20, 30, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
-  padding: 8px 6px;
+  padding: 6px 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
@@ -707,81 +424,51 @@ select:focus {
   letter-spacing: 0.5px;
 }
 
-/* Найм: компактные кнопки внутри карточки */
-.recruitButton {
-  padding: 8px 12px;
-  font-size: 13px;
-  background: linear-gradient(180deg, #46a758, #2f7e3f);
-  box-shadow: 0 3px 0 #1d5427, 0 6px 14px rgba(0, 0, 0, 0.35);
-}
-
+/* Инфо-строка — внизу по центру */
 #info {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: 92vw;
+  margin: 0;
+  background: rgba(20, 20, 30, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
   font-size: 13px;
   color: #cfcfd6;
   line-height: 1.5;
+  text-align: center;
 }
 
-/* ---------- Альбомная ориентация: новая сетка панели ---------- */
-
-@media (orientation: landscape) {
-  #gameScreen {
-    display: grid;
-    grid-template-columns: auto 320px;
-    gap: 12px;
-    justify-content: center;
-    align-items: start;
-  }
-
-  #gameContainer {
-    grid-column: 1;
-    grid-row: 1 / span 6;
-    width: min(1000px, max(280px, min(calc(100vh - 48px), calc(100vw - 350px))));
-    margin: 0;
-  }
-
-  #lang {
-    grid-column: 2;
-    grid-row: 1;
-    justify-self: center;
-    margin-bottom: 0;
-  }
-
-  #saveGameBtn {
-    grid-column: 2;
-    grid-row: 2;
-    justify-self: center;
-    margin: 0;
-  }
-
-  #topBar {
-    grid-column: 2;
-    grid-row: 3;
-    margin-bottom: 0;
-  }
-
-  #resources {
-    grid-column: 2;
-    grid-row: 4;
-    margin-bottom: 0;
-  }
-
-  #recruitPanel {
-    grid-column: 2;
-    grid-row: 5;
-    margin-bottom: 0;
-  }
-
-  #info {
-    grid-column: 2;
-    grid-row: 6;
-    margin: 0;
-  }
+/* Статус сети — под верхней панелью */
+#netStatus {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background-color: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+  color: #ffd76a;
+  pointer-events: none;
+  white-space: pre-line;
+  text-align: center;
 }
 
-/* Панель заявок на место (вместо системного confirm) */
+#netStatus:empty {
+  display: none;
+}
+
+/* Заявки на место — слева под ресурсами */
 #guestRequests {
   position: absolute;
-  top: 8px;
+  top: 120px;
   left: 8px;
   z-index: 6;
   display: flex;
@@ -810,4 +497,111 @@ select:focus {
   flex: 1;
   padding: 6px 8px;
   font-size: 12px;
+  min-width: 0;
+}
+
+/* Окно найма — по центру поверх карты */
+#recruitPanel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 7;
+  width: min(340px, 92vw);
+  max-height: 70vh;
+  overflow-y: auto;
+  background: rgba(18, 18, 28, 0.82);
+  border: 1px solid rgba(212, 162, 78, 0.45);
+  border-radius: 12px;
+  padding: 10px 12px;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+
+.recruitHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  color: #f4d58d;
+}
+
+.recruitClose {
+  padding: 6px 12px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.recruitRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+
+.recruitButton {
+  padding: 8px 12px;
+  font-size: 13px;
+  background: linear-gradient(180deg, #46a758, #2f7e3f);
+  box-shadow: 0 3px 0 #1d5427, 0 6px 14px rgba(0, 0, 0, 0.35);
+}
+
+.recruitStats {
+  font-size: 12px;
+  color: #9a9aa5;
+}
+
+/* ================= ОВЕРЛЕЙ КОНЦА ИГРЫ ================= */
+
+#gameOverOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.overlay-content {
+  background: rgba(18, 18, 28, 0.95);
+  border: 1px solid rgba(212, 162, 78, 0.45);
+  border-radius: 16px;
+  padding: 32px 40px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+}
+
+#gameOverText {
+  margin: 0;
+  font-size: 28px;
+  background: linear-gradient(180deg, #f4d58d, #d4a24e 60%, #a97b2f);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+#gameOverReason {
+  margin: 0;
+  font-size: 16px;
+  color: #dddddd;
+}
+
+/* Тумблер готовности: серый «Не готов», зелёный «Готов» */
+#readyBtn {
+  background: linear-gradient(180deg, #5a5a68, #44444f);
+  box-shadow: 0 3px 0 #2e2e36, 0 6px 14px rgba(0, 0, 0, 0.35);
+  color: #cfcfd6;
+}
+
+#readyBtn.readyOn {
+  background: linear-gradient(180deg, #46a758, #2f7e3f);
+  box-shadow: 0 3px 0 #1d5427, 0 6px 14px rgba(0, 0, 0, 0.35);
+  color: #ffffff;
 }

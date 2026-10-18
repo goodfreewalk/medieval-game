@@ -2,10 +2,27 @@ import { TERRAIN } from "./terrain.js";
 import { createInitialUnits } from "./units.js";
 import { getMapById, parseMap } from "./maps.js";
 
+// Мировой размер клетки в условных пикселях.
+// Камера (zoom/pan) масштабирует мир при отрисовке, поэтому
+// размер canvas больше не влияет на игровую математику.
+export const WORLD_TILE = 64;
+
 export const state = {
   canvas: null,
   ctx: null,
-  tileSize: 0,
+
+  // Параметры экрана (выставляет main.js при ресайзе/старте)
+  viewW: 0,
+  viewH: 0,
+  dpr: 1,
+
+  // Камера: смещение в экранных px и масштаб
+  panX: 0,
+  panY: 0,
+  zoom: 1,
+
+  // Мир
+  tileSize: WORLD_TILE,
   map: null,
   units: [],
   currentPlayer: 1,
@@ -15,15 +32,14 @@ export const state = {
   attackableTiles: new Map(),
   owners: new Map(),
   players: {},
+
   // Реестр устранённых мест (не участвуют в очерёдности и победе)
   eliminated: new Set(),
-  // Виды мест в текущей партии: { id: "human" | "passive" }
+  // Виды мест в текущей партии: { id: "human" | "passive" | "bot" }
   seatKinds: {},
+
   gameOver: false,
-  winner: null,
-  panX: 0,
-  panY: 0,
-  zoom: 1
+  winner: null
 };
 
 export function tileKey(x, y) {
@@ -45,8 +61,7 @@ export function initGame(canvas, ctx, options = {}) {
   state.canvas = canvas;
   state.ctx = ctx;
   state.map = parsed.terrain;
-  // На сервере canvas отсутствует (зеркало состояния) — размер клетки не нужен
-  state.tileSize = canvas ? canvas.width / parsed.size : 0;
+  state.tileSize = WORLD_TILE;
 
   // Владельцы зданий: стартовые наборы отсутствующих игроков становятся нейтральными
   state.owners = new Map();
@@ -129,9 +144,9 @@ function getOwnedTerritories(owner) {
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const tileOwner = getTileOwner(x, y);
+      const owner_ = getTileOwner(x, y);
 
-      if (tileOwner !== owner) {
+      if (owner_ !== owner) {
         continue;
       }
 
@@ -170,4 +185,24 @@ export function getSupplyUsed(owner) {
 
 export function collectIncome(owner) {
   state.players[owner].gold += getIncome(owner);
+}
+
+// Полный сброс клиентского состояния (выход в меню без перезагрузки)
+export function resetState() {
+  state.map = null;
+  state.units = [];
+  state.players = {};
+  state.owners = new Map();
+  state.eliminated = new Set();
+  state.seatKinds = {};
+  state.currentPlayer = 1;
+  state.selectedTile = null;
+  state.selectedUnit = null;
+  state.reachableTiles = new Map();
+  state.attackableTiles = new Map();
+  state.gameOver = false;
+  state.winner = null;
+  state.panX = 0;
+  state.panY = 0;
+  state.zoom = 1;
 }

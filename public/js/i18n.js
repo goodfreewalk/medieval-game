@@ -13,6 +13,7 @@ const translations = {
     currentPlayer: "Ход игрока",
     endTurn: "Завершить ход",
     ready: "Готов",
+    notReady: "Не готов",
     moved: "Двигался",
     acted: "Действовал",
     damage: "Урон",
@@ -115,6 +116,8 @@ const translations = {
     hostOffline: "Хост отключился. Игра продолжается вне комнаты",
     hostEliminated: "Хост выбыл из игры",
     noSaveResume: "сохранение и возобновление недоступны",
+    leaveGame: "Покинуть игру",
+    leaveConfirm: "Точно выйти?",
     playerReturned: "Игрок вернулся в игру",
     resumeWaitingHost: "Хост распределяет места…",
     terrain: {
@@ -147,6 +150,7 @@ const translations = {
     currentPlayer: "Turn of Player",
     endTurn: "End Turn",
     ready: "Ready",
+    notReady: "Not ready",
     moved: "Moved",
     acted: "Acted",
     damage: "Damage",
@@ -249,6 +253,8 @@ const translations = {
     hostOffline: "Host disconnected. The game continues outside room",
     hostEliminated: "The host has been eliminated",
     noSaveResume: "saving and resuming are unavailable",
+    leaveGame: "Leave game",
+    leaveConfirm: "Leave for sure?",
     playerReturned: "Player returned to the game",
     resumeWaitingHost: "The host is assigning seats…",
     terrain: {

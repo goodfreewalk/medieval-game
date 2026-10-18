@@ -2,327 +2,340 @@ import { state, getTileOwner } from "./state.js";
 import { TERRAIN } from "./terrain.js";
 import { PLAYER_COLORS } from "./units.js";
 
-// Цвета местности
-const TERRAIN_COLORS = {
-  [TERRAIN.GRASS]: "#7bb546",
-  [TERRAIN.FOREST]: "#4e8f3a",
-  [TERRAIN.HILL]: "#b0a06a",
-  [TERRAIN.WATER]: "#3d85c8",
-  [TERRAIN.MOUNTAIN]: "#8d8d8d",
-  [TERRAIN.VILLAGE]: "#d9a441",
-  [TERRAIN.CASTLE]: "#b06fd8"
-};
+// ---------- Спрайты (эмодзи) ----------
 
-// Иконки местности и зданий
-const TERRAIN_ICONS = {
+// Ключи — сами константы TERRAIN (значения клеток карты), а не буквы:
+// так словарь работает при любом внутреннем представлении местности
+const TERRAIN_EMOJI = {
   [TERRAIN.FOREST]: "🌲",
   [TERRAIN.HILL]: "⛰️",
   [TERRAIN.WATER]: "🌊",
   [TERRAIN.MOUNTAIN]: "🏔️",
-  [TERRAIN.VILLAGE]: "🏘️",
-  [TERRAIN.CASTLE]: "🏰"
+  [TERRAIN.CASTLE]: "🏰",
+  [TERRAIN.VILLAGE]: "🏘️"
 };
 
-// Иконки юнитов: основная и дополнительная поверх
 const UNIT_ICONS = {
-  militia: { main: "🪓" },
-  archer: { main: "🏹" },
-  swordsman: { main: "⚔️" },
-  lightCavalry: { main: "🏇" },
-  heavyCavalry: { main: "🏇", overlay: "⚔️" },
-  horseArcher: { main: "🏇", overlay: "🏹" }
+  militia: "🪓",
+  archer: "🏹",
+  swordsman: "⚔️",
+  lightCavalry: "🏇",
+  heavyCavalry: "🏇️️⚔️",
+  horseArcher: "🏇🏹"
 };
 
-// ---------- Анимация ----------
+const EMOJI_FONT =
+  '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", serif';
 
-const renderPos = new Map();
-const prevUnits = new Map();
-const effects = [];
+// Разрешение спрайта: с запасом под максимальный зум и hi-dpi.
+// Если на самом глубоком зуме захочется чётче — подними эту константу
+const SPRITE_RES = 512;
 
-let loopStarted = false;
-let lastTime = 0;
+const spriteCache = new Map();
 
-function startLoop() {
-  loopStarted = true;
-  lastTime = performance.now();
-  requestAnimationFrame(frame);
-}
+// Эмодзи растеризуется ОДИН раз в офскрин-canvas без трансформаций;
+// в мир он идёт как картинка через drawImage — это порядково дешевле,
+// чем fillText с цветным глифом каждый кадр
+function getSprite(emoji) {
+  let sprite = spriteCache.get(emoji);
 
-function frame(now) {
-  const dt = Math.min(0.05, (now - lastTime) / 1000);
-  lastTime = now;
-
-  update(dt);
-  draw();
-
-  requestAnimationFrame(frame);
-}
-
-function update(dt) {
-  // Плавное скольжение юнитов
-  for (const unit of state.units) {
-    let rp = renderPos.get(unit.id);
-
-    if (!rp) {
-      renderPos.set(unit.id, { x: unit.x, y: unit.y });
-      effects.push({ type: "pop", x: unit.x, y: unit.y, t: 0, dur: 0.35 });
-      continue;
-    }
-
-    const speed = 10;
-    rp.x += (unit.x - rp.x) * Math.min(1, dt * speed);
-    rp.y += (unit.y - rp.y) * Math.min(1, dt * speed);
-
-    if (Math.abs(unit.x - rp.x) < 0.01) rp.x = unit.x;
-    if (Math.abs(unit.y - rp.y) < 0.01) rp.y = unit.y;
+  if (sprite) {
+    return sprite;
   }
 
-  // Замечаем урон и смерть
+  sprite = document.createElement("canvas");
+  sprite.width = SPRITE_RES;
+  sprite.height = SPRITE_RES;
+
+  const sctx = sprite.getContext("2d");
+  sctx.textAlign = "center";
+  sctx.textBaseline = "middle";
+  sctx.fillStyle = "#ffffff";
+  sctx.font = `${SPRITE_RES * 0.82}px ${EMOJI_FONT}`;
+  sctx.fillText(emoji, SPRITE_RES / 2, SPRITE_RES / 2 + SPRITE_RES * 0.04);
+
+  spriteCache.set(emoji, sprite);
+  return sprite;
+}
+
+// ---------- Цвета ----------
+
+const GRASS_A = "#7bb546";
+const GRASS_B = "#74ad43";
+const FOREST_BG = "#4e8f3a";
+const HILL_BG = "#b0a06a";
+const WATER_BG = "#3d85c8";
+const MOUNTAIN_BG = "#8d8d8d";
+
+// Подложка вне карты — того же цвета, что вода: карта как остров в море
+const SEA_BG = WATER_BG;
+
+function terrainBackground(terrain, x, y) {
+  if (terrain === TERRAIN.FOREST) return FOREST_BG;
+  if (terrain === TERRAIN.HILL) return HILL_BG;
+  if (terrain === TERRAIN.WATER) return WATER_BG;
+  if (terrain === TERRAIN.MOUNTAIN) return MOUNTAIN_BG;
+  return (x + y) % 2 === 0 ? GRASS_A : GRASS_B;
+}
+
+// ---------- Плавное движение юнитов ----------
+
+const visualPos = new Map();
+let lastMap = null;
+
+function updateVisualPositions() {
   const alive = new Set();
 
   for (const unit of state.units) {
     alive.add(unit.id);
 
-    const prev = prevUnits.get(unit.id);
+    let vp = visualPos.get(unit.id);
 
-    if (prev && unit.hp < prev.hp) {
-      effects.push({ type: "hit", x: unit.x, y: unit.y, t: 0, dur: 0.4 });
+    if (!vp) {
+      vp = { x: unit.x, y: unit.y };
+      visualPos.set(unit.id, vp);
     }
 
-    prevUnits.set(unit.id, { hp: unit.hp, x: unit.x, y: unit.y });
+    vp.x += (unit.x - vp.x) * 0.22;
+    vp.y += (unit.y - vp.y) * 0.22;
+
+    if (Math.abs(unit.x - vp.x) < 0.01) vp.x = unit.x;
+    if (Math.abs(unit.y - vp.y) < 0.01) vp.y = unit.y;
   }
 
-  for (const [id, prev] of prevUnits) {
+  for (const id of Array.from(visualPos.keys())) {
     if (!alive.has(id)) {
-      effects.push({ type: "death", x: prev.x, y: prev.y, t: 0, dur: 0.5 });
-      prevUnits.delete(id);
-      renderPos.delete(id);
-    }
-  }
-
-  // Продвигаем эффекты
-  for (let i = effects.length - 1; i >= 0; i--) {
-    effects[i].t += dt;
-
-    if (effects[i].t >= effects[i].dur) {
-      effects.splice(i, 1);
+      visualPos.delete(id);
     }
   }
 }
 
-// ---------- Рисование ----------
+// Есть ли незавершённое скольжение (нужны ли новые кадры анимации)
+function animationsActive() {
+  for (const unit of state.units) {
+    const vp = visualPos.get(unit.id);
 
-function drawEmoji(ctx, emoji, x, y, size) {
-  ctx.save();
-  ctx.font = `${size}px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(emoji, x, y);
-  ctx.restore();
+    if (!vp) {
+      return true;
+    }
+
+    if (vp.x !== unit.x || vp.y !== unit.y) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
-// Число здоровья под юнитом
-function drawHpNumber(ctx, hp, cx, cy, ts) {
-  ctx.save();
-  ctx.font = `bold ${Math.round(ts * 0.22)}px Arial, sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
+// ---------- Отрисовка кадра ----------
 
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = "rgba(0,0,0,0.8)";
-  ctx.strokeText(hp, cx, cy + ts * 0.42);
-
-  ctx.fillStyle = "#ffffff";
-  ctx.fillText(hp, cx, cy + ts * 0.42);
-  ctx.restore();
-}
-
-function draw() {
+function drawFrame() {
   const ctx = state.ctx;
+  const canvas = state.canvas;
 
-  // ФИКС: не рисуем, пока игра не инициализирована
-  // (иначе смена языка в меню убивала render-цикл навсегда)
-  if (!ctx || !state.map || !state.canvas) {
+  if (!ctx || !canvas || !state.map) {
     return;
   }
 
-  const ts = state.tileSize;
+  // Новая партия/резюм — сбрасываем визуальные позиции
+  if (lastMap !== state.map) {
+    lastMap = state.map;
+    visualPos.clear();
+  }
 
-  ctx.clearRect(0, 0, state.canvas.width, state.canvas.height);
+  updateVisualPositions();
 
-  // --- Клетки местности ---
-  for (let y = 0; y < state.map.length; y++) {
-    for (let x = 0; x < state.map[y].length; x++) {
+  const dpr = state.dpr || 1;
+
+  // Экранные координаты: очистка и «море» по бокам
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, state.viewW, state.viewH);
+  ctx.fillStyle = SEA_BG;
+  ctx.fillRect(0, 0, state.viewW, state.viewH);
+
+  // Мировые координаты: камера
+  ctx.translate(state.panX, state.panY);
+  ctx.scale(state.zoom, state.zoom);
+
+  const T = state.tileSize;
+  const size = state.map.length;
+
+  // ----- Клетки местности -----
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const px = x * T;
+      const py = y * T;
       const terrain = state.map[y][x];
-      const px = x * ts;
-      const py = y * ts;
 
-      // Базовый фон: деревни и замки на зелёном
-      if (terrain === TERRAIN.VILLAGE || terrain === TERRAIN.CASTLE) {
-        ctx.fillStyle = TERRAIN_COLORS[TERRAIN.GRASS];
-      } else {
-        ctx.fillStyle = TERRAIN_COLORS[terrain];
+      ctx.fillStyle = terrainBackground(terrain, x, y);
+      ctx.fillRect(px, py, T, T);
+
+      const emoji = TERRAIN_EMOJI[terrain];
+
+      if (emoji) {
+        const s = T * 0.72;
+        ctx.drawImage(
+          getSprite(emoji),
+          px + (T - s) / 2,
+          py + (T - s) / 2 + T * 0.02,
+          s,
+          s
+        );
       }
+    }
+  }
 
-      ctx.fillRect(px, py, ts, ts);
+  // ----- Подсветки хода (под юнитами) -----
+  for (const key of state.reachableTiles.keys()) {
+    const [x, y] = key.split(",").map(Number);
+    ctx.fillStyle = "rgba(80, 220, 120, 0.35)";
+    ctx.fillRect(x * T, y * T, T, T);
+  }
 
-      if (terrain === TERRAIN.GRASS && (x + y) % 2 === 0) {
-        ctx.fillStyle = "rgba(255,255,255,0.05)";
-        ctx.fillRect(px, py, ts, ts);
+  for (const key of state.attackableTiles.keys()) {
+    const [x, y] = key.split(",").map(Number);
+    ctx.fillStyle = "rgba(229, 72, 77, 0.30)";
+    ctx.fillRect(x * T, y * T, T, T);
+    ctx.strokeStyle = "#e5484d";
+    ctx.lineWidth = T * 0.05;
+    ctx.strokeRect(x * T + 2, y * T + 2, T - 4, T - 4);
+  }
+
+  // ----- Здания: рамка и флаг владельца -----
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const terrain = state.map[y][x];
+
+      if (terrain !== TERRAIN.CASTLE && terrain !== TERRAIN.VILLAGE) {
+        continue;
       }
 
       const owner = getTileOwner(x, y);
 
-      // Иконка местности или здания (здания крупнее)
-      if (TERRAIN_ICONS[terrain]) {
-        const size =
-          terrain === TERRAIN.CASTLE || terrain === TERRAIN.VILLAGE
-            ? ts * 0.7
-            : ts * 0.62;
-
-        drawEmoji(ctx, TERRAIN_ICONS[terrain], px + ts / 2, py + ts / 2, size);
+      if (owner === 0) {
+        continue;
       }
 
-      // Рамка владельца по краю клетки
-      if (owner !== 0) {
-        ctx.strokeStyle = PLAYER_COLORS[owner];
-        ctx.lineWidth = 3;
-        ctx.strokeRect(px + 1.5, py + 1.5, ts - 3, ts - 3);
-      }
+      const px = x * T;
+      const py = y * T;
 
-    // Флаг владельца на зданиях: древко + сплошное прямоугольное полотнище
-    if (
-      owner !== 0 &&
-      (terrain === TERRAIN.CASTLE || terrain === TERRAIN.VILLAGE)
-    ) {
-      const poleWidth = Math.max(2, ts * 0.05);
-      const fx = px + ts * 0.74;
-      const fy = py + ts * 0.08;
+      ctx.strokeStyle = PLAYER_COLORS[owner];
+      ctx.lineWidth = T * 0.06;
+      ctx.strokeRect(
+        px + ctx.lineWidth / 2,
+        py + ctx.lineWidth / 2,
+        T - ctx.lineWidth,
+        T - ctx.lineWidth
+      );
 
-      // Древко
+      // Флаг: древко + сплошное прямоугольное полотнище
+      const poleW = Math.max(2, T * 0.05);
+      const fx = px + T * 0.74;
+      const fy = py + T * 0.08;
+
       ctx.fillStyle = "#3a2b1a";
-      ctx.fillRect(fx, fy, poleWidth, ts * 0.36);
+      ctx.fillRect(fx, fy, poleW, T * 0.36);
 
-      // Полотнище цвета игрока
       ctx.fillStyle = PLAYER_COLORS[owner];
-      ctx.fillRect(fx + poleWidth, fy, ts * 0.26, ts * 0.17);
+      ctx.fillRect(fx + poleW, fy, T * 0.26, T * 0.17);
 
-      // Тёмная окантовка для читаемости на любом фоне
-      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
       ctx.lineWidth = 1;
-      ctx.strokeRect(fx + poleWidth, fy, ts * 0.26, ts * 0.17);
-    }
-
-      ctx.strokeStyle = "rgba(0,0,0,0.08)";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(px + 0.5, py + 0.5, ts - 1, ts - 1);
+      ctx.strokeRect(fx + poleW, fy, T * 0.26, T * 0.17);
     }
   }
 
-  // --- Подсветка движения ---
-  for (const tile of state.reachableTiles.values()) {
-    ctx.fillStyle = "rgba(0, 255, 120, 0.28)";
-    ctx.fillRect(tile.x * ts, tile.y * ts, ts, ts);
-  }
-
-  // --- Подсветка атаки ---
-  for (const tile of state.attackableTiles.values()) {
-    ctx.fillStyle = "rgba(255, 60, 60, 0.35)";
-    ctx.fillRect(tile.x * ts, tile.y * ts, ts, ts);
-  }
-
-  // --- Выбранная клетка ---
+  // ----- Выбранная клетка -----
   if (state.selectedTile) {
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(
-      state.selectedTile.x * ts + 1.5,
-      state.selectedTile.y * ts + 1.5,
-      ts - 3,
-      ts - 3
-    );
+    const px = state.selectedTile.x * T;
+    const py = state.selectedTile.y * T;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.lineWidth = T * 0.05;
+    ctx.strokeRect(px + 2, py + 2, T - 4, T - 4);
   }
 
-  // --- Юниты ---
+  // ----- Юниты (с плавным скольжением и спрайт-иконками) -----
   for (const unit of state.units) {
-    const rp = renderPos.get(unit.id) || { x: unit.x, y: unit.y };
+    const vp = visualPos.get(unit.id) || { x: unit.x, y: unit.y };
+    const cx = vp.x * T + T / 2;
+    const cy = vp.y * T + T / 2;
 
-    const cx = rp.x * ts + ts / 2;
-    const cy = rp.y * ts + ts / 2;
-
-    const acted =
+    const exhausted =
       unit.owner === state.currentPlayer &&
-      (unit.hasAttacked || unit.movementLeft <= 0);
+      unit.hasAttacked &&
+      unit.movementLeft <= 0;
 
-    ctx.save();
+    ctx.globalAlpha = exhausted ? 0.55 : 1;
 
-    if (acted) {
-      ctx.globalAlpha = 0.55;
-    }
-
-    // Просто цветной круг без окантовки
     ctx.beginPath();
-    ctx.arc(cx, cy, ts * 0.34, 0, Math.PI * 2);
+    ctx.arc(cx, cy, T * 0.30, 0, Math.PI * 2);
     ctx.fillStyle = PLAYER_COLORS[unit.owner];
     ctx.fill();
 
-    // Основная иконка
-    const icons = UNIT_ICONS[unit.type];
-    drawEmoji(ctx, icons.main, cx, cy, ts * 0.4);
-
-    // Дополнительная иконка поверх (лук или меч у конницы)
-    if (icons.overlay) {
-      drawEmoji(ctx, icons.overlay, cx + ts * 0.22, cy - ts * 0.24, ts * 0.26);
-    }
-
-    // Число здоровья внизу
-    drawHpNumber(ctx, unit.hp, cx, cy, ts);
-
-    ctx.restore();
-  }
-
-  // --- Эффекты ---
-  for (const effect of effects) {
-    const progress = effect.t / effect.dur;
-    const cx = effect.x * ts + ts / 2;
-    const cy = effect.y * ts + ts / 2;
-
-    if (effect.type === "hit") {
-      ctx.save();
-      ctx.globalAlpha = 1 - progress;
-      ctx.strokeStyle = "#ff4d4d";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(cx, cy, ts * (0.2 + progress * 0.4), 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    if (effect.type === "death") {
-      ctx.save();
-      ctx.globalAlpha = 1 - progress;
-      drawEmoji(ctx, "💥", cx, cy, ts * (0.4 + progress * 0.5));
-      ctx.restore();
-    }
-
-    if (effect.type === "pop") {
-      ctx.save();
-      ctx.globalAlpha = 1 - progress;
+    if (unit === state.selectedUnit) {
+      ctx.lineWidth = T * 0.06;
       ctx.strokeStyle = "#ffffff";
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(cx, cy, ts * (0.1 + progress * 0.45), 0, Math.PI * 2);
       ctx.stroke();
-      ctx.restore();
+    } else {
+      ctx.lineWidth = Math.max(1, T * 0.03);
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.4)";
+      ctx.stroke();
     }
+
+    const icon = UNIT_ICONS[unit.type];
+
+    if (icon) {
+      const s = T * 0.46;
+      ctx.drawImage(getSprite(icon), cx - s / 2, cy - s / 2 - T * 0.02, s, s);
+    }
+
+    // Здоровье под кругом (обычный текст: цифры дёшевы)
+    ctx.font = `bold ${T * 0.17}px sans-serif`;
+    ctx.lineWidth = T * 0.05;
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.75)";
+    ctx.strokeText(String(unit.hp), cx, cy + T * 0.42);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(String(unit.hp), cx, cy + T * 0.42);
+
+    ctx.globalAlpha = 1;
   }
 
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-// Точка входа: запускает цикл отрисовки
-// ФИКС: запускаем цикл только когда карта существует
+// ---------- Кадровый цикл с dirty-флагом ----------
+
+let rafId = null;
+let needsDraw = true;
+
+function tick() {
+  rafId = null;
+
+  const animating = animationsActive();
+
+  if (needsDraw || animating) {
+    needsDraw = false;
+    drawFrame();
+  }
+
+  // Продолжаем крутить цикл только пока есть карта И есть причина
+  // рисовать (анимация ещё скользит или поступил новый запрос кадра).
+  // В простое цикл остановлен — CPU/GPU не тратятся.
+  if (state.map && (needsDraw || animationsActive())) {
+    rafId = requestAnimationFrame(tick);
+  }
+}
+
 export function drawGame() {
-  if (!loopStarted && state.map) {
-    startLoop();
+  needsDraw = true;
+
+  if (typeof requestAnimationFrame === "undefined") {
+    needsDraw = false;
+    drawFrame();
+    return;
+  }
+
+  if (rafId === null) {
+    rafId = requestAnimationFrame(tick);
   }
 }

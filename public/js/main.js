@@ -1,6 +1,7 @@
 import {
   state,
   initGame,
+  resetState,
   getPlayerGold,
   getIncome,
   getSupplyCapacity,
@@ -41,8 +42,7 @@ import {
   applyAttack,
   applyRecruit,
   applyEndTurn,
-  eliminatePlayer,
-  getTileFromClick
+  eliminatePlayer
 } from "./logic.js";
 
 // --- Элементы DOM ---
@@ -54,6 +54,7 @@ const turnInfo = document.getElementById("turnInfo");
 const timerElement = document.getElementById("timer");
 const endTurnButton = document.getElementById("endTurn");
 const saveGameBtn = document.getElementById("saveGameBtn");
+const leaveGameBtn = document.getElementById("leaveGameBtn");
 const resourcesElement = document.getElementById("resources");
 const recruitPanel = document.getElementById("recruitPanel");
 const langSelect = document.getElementById("lang");
@@ -62,15 +63,12 @@ const gameOverText = document.getElementById("gameOverText");
 const gameOverReason = document.getElementById("gameOverReason");
 const playAgainButton = document.getElementById("playAgainBtn");
 
-// Строка статуса сети (переподключение / ожидание / сохранения)
 const netStatus = document.getElementById("netStatus");
-
-// Панель заявок на место (вместо системного confirm)
 const guestRequests = document.getElementById("guestRequests");
 const pendingGuestRequests = new Map();
+const gameContainer = document.getElementById("gameContainer");
 
-// «Липкий» статус: важное постоянное сообщение (например, «хост отключился»).
-// Временные статусы его перекрывают, но при очистке оно возвращается.
+// «Липкий» статус: важное постоянное сообщение (например, «хост отключился»)
 let stickyStatus = "";
 
 function setNetStatus(text) {
@@ -95,14 +93,12 @@ let timeLeft = TURN_TIME;
 
 // --- Служебное состояние клиента ---
 
-// Заявки на устранение, уже отправленные серверу (защита от спама)
 const pendingEliminations = new Set();
-
-// Данные резюма, ждущие fullState
 let pendingResume = null;
-
-// Защита от повторной отправки gameOver
 let gameOverSent = false;
+
+let leaveArmed = false;
+let leaveArmedTimer = null;
 
 // --- Вспомогательные функции ---
 
@@ -117,7 +113,6 @@ function sendAction(action) {
 // --- Панель заявок на место ---
 
 function addGuestRequest(message) {
-  // Повторная заявка того же гостя — не дублируем
   if (pendingGuestRequests.has(message.guestId)) {
     return;
   }
@@ -174,6 +169,140 @@ function clearGuestRequests() {
   pendingGuestRequests.clear();
 }
 
+// --- Камера (новая архитектура: мир в контексте, не в CSS) ---
+
+let fitZoom = 1;
+let minZoom = 0.25;
+let maxZoom = 3;
+
+// Инлайн-стили побеждают любой CSS: игровой экран = весь viewport,
+// контейнер карты = весь экран. Больше никаких «квадратов 892×892»
+function layoutGameScreen() {
+  const gameScreen = document.getElementById("gameScreen");
+
+  gameScreen.style.position = "fixed";
+  gameScreen.style.inset = "0";
+  gameScreen.style.overflow = "hidden";
+
+  gameContainer.style.position = "absolute";
+  gameContainer.style.inset = "0";
+  gameContainer.style.width = "auto";
+  gameContainer.style.height = "auto";
+  gameContainer.style.margin = "0";
+}
+
+function worldSize() {
+  return state.map ? state.map.length * state.tileSize : 0;
+}
+
+function computeFitZoom() {
+  const w = worldSize();
+
+  if (!w) {
+    return;
+  }
+
+  fitZoom = Math.min(state.viewW / w, state.viewH / w);
+  minZoom = fitZoom;
+  maxZoom = fitZoom * 4;
+}
+
+// Границы: карта целиком в кадре — центрируем; приближена — не утаскиваем за экран
+function clampCamera() {
+  const scaled = worldSize() * state.zoom;
+
+  if (scaled <= state.viewW) {
+    state.panX = (state.viewW - scaled) / 2;
+  } else {
+    const minX = state.viewW - scaled;
+    state.panX = Math.max(minX, Math.min(0, state.panX));
+  }
+
+  if (scaled <= state.viewH) {
+    state.panY = (state.viewH - scaled) / 2;
+  } else {
+    const minY = state.viewH - scaled;
+    state.panY = Math.max(minY, Math.min(0, state.panY));
+  }
+}
+
+// Canvas получает физический размер от контейнера (с dpr) —
+// никаких CSS-растягиваний и расхождений с атрибутами
+function resizeCanvas() {
+  const rect = gameContainer.getBoundingClientRect();
+
+  if (rect.width === 0 || rect.height === 0) {
+    return;
+  }
+
+  const dpr = window.devicePixelRatio || 1;
+
+  state.viewW = Math.round(rect.width);
+  state.viewH = Math.round(rect.height);
+  state.dpr = dpr;
+
+  canvas.width = Math.round(state.viewW * dpr);
+  canvas.height = Math.round(state.viewH * dpr);
+  canvas.style.width = `${state.viewW}px`;
+  canvas.style.height = `${state.viewH}px`;
+
+  if (state.map) {
+    computeFitZoom();
+    state.zoom = Math.max(minZoom, Math.min(maxZoom, state.zoom));
+    clampCamera();
+    drawGame();
+  }
+}
+
+function initCamera() {
+  resizeCanvas();
+
+  if (!state.map) {
+    return;
+  }
+
+  state.zoom = fitZoom;
+  clampCamera();
+  drawGame();
+}
+
+function zoomAt(localX, localY, newZoom) {
+  const clamped = Math.max(minZoom, Math.min(maxZoom, newZoom));
+  const worldX = (localX - state.panX) / state.zoom;
+  const worldY = (localY - state.panY) / state.zoom;
+
+  state.zoom = clamped;
+  state.panX = localX - worldX * state.zoom;
+  state.panY = localY - worldY * state.zoom;
+
+  clampCamera();
+  drawGame();
+}
+
+// Экранные координаты клика → клетка мира
+function screenToTile(event) {
+  if (!state.map) {
+    return null;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  const cssX = event.clientX - rect.left;
+  const cssY = event.clientY - rect.top;
+
+  const worldX = (cssX - state.panX) / state.zoom;
+  const worldY = (cssY - state.panY) / state.zoom;
+
+  const x = Math.floor(worldX / state.tileSize);
+  const y = Math.floor(worldY / state.tileSize);
+  const size = state.map.length;
+
+  if (x < 0 || x >= size || y < 0 || y >= size) {
+    return null;
+  }
+
+  return { x, y };
+}
+
 // --- Обновление интерфейса ---
 
 function updateTurnInfo() {
@@ -182,11 +311,9 @@ function updateTurnInfo() {
   if (isMyTurn()) {
     turnInfo.textContent = t("yourTurn");
   } else if (kind === "passive") {
-    // Пассивное место: ход ведёт сервер
     turnInfo.textContent =
       `${t("seatLabel")} ${state.currentPlayer} — ${t("seatPassive")}`;
   } else if (kind === "bot") {
-    // Место под управлением серверного бота
     turnInfo.textContent =
       `${t("seatLabel")} ${state.currentPlayer} — ${t("seatBot")}`;
   } else {
@@ -250,7 +377,6 @@ function autoEndTurn() {
 function updateResources() {
   const player = getMyPlayerId();
 
-  // Три карточки: золото, доход, снабжение
   resourcesElement.innerHTML =
     `<div class="statCard">` +
     `<span class="statIcon">💰</span>` +
@@ -317,10 +443,7 @@ function updateInfo() {
       const owner = getTileOwner(state.selectedTile.x, state.selectedTile.y);
       const isCastle = terrain === TERRAIN.CASTLE;
 
-      const gold = isCastle ? 6 : 2;
-      const supply = isCastle ? 3 : 1;
-
-      text += ` | 💰 +${gold} | 📦 +${supply}`;
+      text += ` | 💰 +${isCastle ? 6 : 2} | 📦 +${isCastle ? 3 : 1}`;
 
       if (owner !== 0) {
         text += ` | 🚩 ${owner}`;
@@ -334,40 +457,61 @@ function updateInfo() {
   info.textContent = t("infoDefault");
 }
 
+function closeRecruitPanel() {
+  state.selectedTile = null;
+  state.selectedUnit = null;
+  state.reachableTiles = new Map();
+  state.attackableTiles = new Map();
+
+  updateRecruitPanel();
+  updateInfo();
+  drawGame();
+}
+
 function updateRecruitPanel() {
   recruitPanel.innerHTML = "";
 
-  if (!state.selectedTile || state.gameOver) {
-    return;
-  }
-
   const tile = state.selectedTile;
+
+  const show =
+    tile &&
+    state.map &&
+    !state.gameOver &&
+    (state.map[tile.y][tile.x] === TERRAIN.CASTLE ||
+      state.map[tile.y][tile.x] === TERRAIN.VILLAGE) &&
+    getTileOwner(tile.x, tile.y) === getMyPlayerId() &&
+    isMyTurn() &&
+    !getUnitAtTile(state.units, tile.x, tile.y);
+
+  recruitPanel.style.display = show ? "" : "none";
+
+  if (!show) {
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "recruitHeader";
+
+  const title = document.createElement("span");
+  title.textContent = t("recruit");
+
+  const close = document.createElement("button");
+  close.className = "recruitClose";
+  close.textContent = "✕";
+  close.addEventListener("click", closeRecruitPanel);
+
+  header.appendChild(title);
+  header.appendChild(close);
+  recruitPanel.appendChild(header);
+
   const terrain = state.map[tile.y][tile.x];
-
-  if (terrain !== TERRAIN.CASTLE && terrain !== TERRAIN.VILLAGE) {
-    return;
-  }
-
-  const owner = getTileOwner(tile.x, tile.y);
-
-  if (owner !== getMyPlayerId()) {
-    return;
-  }
-
-  if (!isMyTurn()) {
-    return;
-  }
-
-  if (getUnitAtTile(state.units, tile.x, tile.y)) {
-    return;
-  }
 
   const icons = {
     militia: "🪓",
     archer: "🏹",
     swordsman: "⚔️",
     lightCavalry: "🏇",
-    heavyCavalry: "🏇️⚔️",
+    heavyCavalry: "🏇️️⚔️",
     horseArcher: "🏇🏹"
   };
 
@@ -394,12 +538,7 @@ function updateRecruitPanel() {
     }
 
     button.addEventListener("click", () => {
-      const action = {
-        kind: "recruit",
-        type,
-        x: tile.x,
-        y: tile.y
-      };
+      const action = { kind: "recruit", type, x: tile.x, y: tile.y };
 
       if (runAction(action)) {
         sendAction(action);
@@ -417,8 +556,6 @@ function updateRecruitPanel() {
   }
 }
 
-// Боевое устранение: у места не осталось ни юнитов, ни зданий —
-// сообщаем серверу, он исключит место из очерёдности у всех
 function detectEliminations() {
   if (!state.map || state.gameOver) {
     return;
@@ -459,12 +596,9 @@ function refreshGame() {
   updateRecruitPanel();
   updateInfo();
 
-  // Кнопка сохранения видна только хосту во время игры
   saveGameBtn.style.display =
     getMyPlayerId() === 1 && state.map && !state.gameOver ? "" : "none";
 
-  // Предохранитель: если сервер считает НАШЕ место пассивным,
-  // честно говорим об этом вместо молчаливого бесправия
   if (state.map && !state.gameOver &&
       state.seatKinds[getMyPlayerId()] === "passive") {
     setNetStatus(t("seatSelfPassive"));
@@ -481,6 +615,10 @@ function applyLanguage() {
   playAgainButton.textContent = t("playAgain");
   saveGameBtn.textContent = t("saveGame");
 
+  if (!leaveArmed) {
+    leaveGameBtn.textContent = t("leaveGame");
+  }
+
   refreshGame();
 
   if (state.gameOver) {
@@ -492,19 +630,14 @@ function showGameOver(reason) {
   stopTurnTimer();
   clearGuestRequests();
 
-  // При потере соединения сессию НЕ чистим: после перезагрузки
-  // страницы игрок сможет вернуться в ещё живую комнату
   if (reason !== t("connectionLost")) {
     clearGameSession();
   }
 
-  // Карточка сохранения больше не нужна (кроме случая потери связи:
-  // там партия может продолжаться и пригодится возврат)
   if (reason !== t("connectionLost") && getRoomCode()) {
     removeResumeCard(getRoomCode());
   }
 
-  // Сообщаем серверу, чтобы результат увидели все, включая выбывших
   if (state.map && !gameOverSent) {
     gameOverSent = true;
     sendMessage({ type: "gameOver", winner: state.winner });
@@ -525,8 +658,6 @@ function showGameOver(reason) {
   }
 }
 
-// --- Обработка выхода соперника ---
-
 function handleOpponentLeft() {
   if (state.gameOver) {
     return;
@@ -536,8 +667,6 @@ function handleOpponentLeft() {
   state.winner = getMyPlayerId();
   showGameOver(t("opponentLeft"));
 }
-
-// --- Обработка потери соединения ---
 
 function handleConnectionLost() {
   stopTurnTimer();
@@ -563,7 +692,38 @@ function handleConnectionLost() {
   showGameOver(t("connectionLost"));
 }
 
-// --- Снапшот состояния для синхронизации и сохранений ---
+function leaveGame() {
+  if (!leaveArmed) {
+    leaveArmed = true;
+    leaveGameBtn.textContent = t("leaveConfirm");
+    leaveGameBtn.classList.add("danger");
+
+    clearTimeout(leaveArmedTimer);
+    leaveArmedTimer = setTimeout(() => {
+      leaveArmed = false;
+      leaveGameBtn.textContent = t("leaveGame");
+      leaveGameBtn.classList.remove("danger");
+    }, 3000);
+    return;
+  }
+
+  clearTimeout(leaveArmedTimer);
+  leaveArmed = false;
+  leaveGameBtn.classList.remove("danger");
+  leaveGameBtn.textContent = t("leaveGame");
+
+  sendMessage({ type: "leaveRoom" });
+
+  stopTurnTimer();
+  clearGameSession();
+  clearGuestRequests();
+  setStickyStatus("");
+  setNetStatus("");
+  resetState();
+  showScreen("menuScreen");
+}
+
+// --- Снапшот состояния ---
 
 function serializeState() {
   return {
@@ -667,7 +827,6 @@ function runAction(action) {
   if (action.kind === "endTurn") {
     applyEndTurn();
 
-    // Сообщаем серверу, кто ходит следующим (единое правило реестра)
     action.next = state.currentPlayer;
 
     updateSelectionHighlights();
@@ -691,59 +850,6 @@ function runAction(action) {
   return false;
 }
 
-// --- Камера ---
-
-const gameContainer = document.getElementById("gameContainer");
-
-let fitZoom = 1;
-let minZoom = 0.5;
-let maxZoom = 3;
-
-function applyCanvasTransform() {
-  canvas.style.transform =
-    `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
-}
-
-function clampPan() {
-  const rect = gameContainer.getBoundingClientRect();
-  const scaledW = canvas.width * state.zoom;
-  const scaledH = canvas.height * state.zoom;
-
-  const minX = Math.min(0, rect.width - scaledW);
-  const maxX = Math.max(0, rect.width - scaledW);
-  const minY = Math.min(0, rect.height - scaledH);
-  const maxY = Math.max(0, rect.height - scaledH);
-
-  state.panX = Math.max(minX, Math.min(maxX, state.panX));
-  state.panY = Math.max(minY, Math.min(maxY, state.panY));
-}
-
-function initCamera() {
-  const rect = gameContainer.getBoundingClientRect();
-
-  if (rect.width === 0 || rect.height === 0) {
-    return;
-  }
-
-  fitZoom = Math.min(
-    rect.width / canvas.width,
-    rect.height / canvas.height
-  );
-  minZoom = fitZoom;
-  maxZoom = fitZoom * 2;
-
-  state.zoom = fitZoom;
-  state.panX = (rect.width - canvas.width * state.zoom) / 2;
-  state.panY = (rect.height - canvas.height * state.zoom) / 2;
-
-  clampPan();
-  applyCanvasTransform();
-}
-
-window.addEventListener("resize", () => {
-  initCamera();
-});
-
 // --- Жесты и мышь ---
 
 let isDragging = false;
@@ -761,17 +867,9 @@ function getTouchDistance(touches) {
   return Math.hypot(dx, dy);
 }
 
-function zoomAt(localX, localY, newZoom) {
-  const worldX = (localX - state.panX) / state.zoom;
-  const worldY = (localY - state.panY) / state.zoom;
-
-  state.zoom = Math.max(minZoom, Math.min(maxZoom, newZoom));
-
-  state.panX = localX - worldX * state.zoom;
-  state.panY = localY - worldY * state.zoom;
-
-  clampPan();
-  applyCanvasTransform();
+function getLocalPoint(clientX, clientY) {
+  const rect = gameContainer.getBoundingClientRect();
+  return { x: clientX - rect.left, y: clientY - rect.top };
 }
 
 gameContainer.addEventListener("touchstart", (e) => {
@@ -801,16 +899,17 @@ gameContainer.addEventListener("touchmove", (e) => {
     state.panX = dragStartPanX + dx;
     state.panY = dragStartPanY + dy;
 
-    clampPan();
-    applyCanvasTransform();
+    clampCamera();
+    drawGame();
     e.preventDefault();
   } else if (e.touches.length === 2) {
     const dist = getTouchDistance(e.touches);
-    const rect = gameContainer.getBoundingClientRect();
-    const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
-    const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+    const mid = getLocalPoint(
+      (e.touches[0].clientX + e.touches[1].clientX) / 2,
+      (e.touches[0].clientY + e.touches[1].clientY) / 2
+    );
 
-    zoomAt(cx, cy, pinchStartZoom * (dist / pinchStartDist));
+    zoomAt(mid.x, mid.y, pinchStartZoom * (dist / pinchStartDist));
     e.preventDefault();
   }
 }, { passive: false });
@@ -832,12 +931,15 @@ gameContainer.addEventListener("mousedown", (e) => {
     return;
   }
 
+  e.preventDefault();
+
   isDragging = true;
   dragMoved = false;
   dragStartX = e.clientX;
   dragStartY = e.clientY;
   dragStartPanX = state.panX;
   dragStartPanY = state.panY;
+  gameContainer.classList.add("dragging");
 });
 
 window.addEventListener("mousemove", (e) => {
@@ -855,25 +957,60 @@ window.addEventListener("mousemove", (e) => {
   state.panX = dragStartPanX + dx;
   state.panY = dragStartPanY + dy;
 
-  clampPan();
-  applyCanvasTransform();
+  clampCamera();
+  drawGame();
 });
 
 window.addEventListener("mouseup", () => {
   isDragging = false;
+  gameContainer.classList.remove("dragging");
 });
 
 gameContainer.addEventListener("wheel", (e) => {
   e.preventDefault();
 
-  const rect = gameContainer.getBoundingClientRect();
-  const localX = e.clientX - rect.left;
-  const localY = e.clientY - rect.top;
-
+  const local = getLocalPoint(e.clientX, e.clientY);
   const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
 
-  zoomAt(localX, localY, state.zoom * factor);
+  zoomAt(local.x, local.y, state.zoom * factor);
 }, { passive: false });
+
+// Стрелки двигают взгляд (камеру): вверх — верх карты, вниз — низ
+const KEY_PAN_STEP = 80;
+
+window.addEventListener("keydown", (e) => {
+  if (!state.map || state.gameOver) {
+    return;
+  }
+
+  const tag = (e.target && e.target.tagName) || "";
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") {
+    return;
+  }
+
+  let dx = 0;
+  let dy = 0;
+
+  if (e.key === "ArrowUp") {
+    dy = KEY_PAN_STEP;
+  } else if (e.key === "ArrowDown") {
+    dy = -KEY_PAN_STEP;
+  } else if (e.key === "ArrowLeft") {
+    dx = KEY_PAN_STEP;
+  } else if (e.key === "ArrowRight") {
+    dx = -KEY_PAN_STEP;
+  } else {
+    return;
+  }
+
+  e.preventDefault();
+
+  state.panX += dx;
+  state.panY += dy;
+
+  clampCamera();
+  drawGame();
+});
 
 // --- Клик по карте ---
 
@@ -887,13 +1024,24 @@ canvas.addEventListener("click", (event) => {
     return;
   }
 
-  const tile = getTileFromClick(event);
+  const tile = screenToTile(event);
 
   if (!tile) {
     return;
   }
 
   const clickedUnit = getUnitAtTile(state.units, tile.x, tile.y);
+
+  // Повторный клик по уже выбранной пустой клетке — закрыть окно найма
+  if (
+    !clickedUnit &&
+    state.selectedTile &&
+    state.selectedTile.x === tile.x &&
+    state.selectedTile.y === tile.y
+  ) {
+    closeRecruitPanel();
+    return;
+  }
 
   if (clickedUnit && clickedUnit === state.selectedUnit) {
     state.selectedUnit = null;
@@ -907,10 +1055,7 @@ canvas.addEventListener("click", (event) => {
     return;
   }
 
-  if (
-    isMyTurn() &&
-    canAttackUnit(state.selectedUnit, clickedUnit)
-  ) {
+  if (isMyTurn() && canAttackUnit(state.selectedUnit, clickedUnit)) {
     const action = {
       kind: "attack",
       attackerId: state.selectedUnit.id,
@@ -970,7 +1115,6 @@ endTurnButton.addEventListener("click", () => {
   }
 });
 
-// Сохранение партии: только хост, только во время игры
 saveGameBtn.addEventListener("click", () => {
   if (getMyPlayerId() !== 1 || !state.map || state.gameOver) {
     return;
@@ -979,17 +1123,27 @@ saveGameBtn.addEventListener("click", () => {
   sendMessage({ type: "saveGame", state: serializeState() });
 });
 
-// --- Смена языка ---
+leaveGameBtn.addEventListener("click", leaveGame);
+
+// --- Смена языка / оверлей ---
 
 langSelect.addEventListener("change", () => {
   setLanguage(langSelect.value);
   applyLanguage();
 });
 
-// --- Сыграть ещё раз ---
-
 playAgainButton.addEventListener("click", () => {
   location.reload();
+});
+
+// --- Ресайз окна / ориентации ---
+
+window.addEventListener("resize", () => {
+  resizeCanvas();
+});
+
+window.addEventListener("orientationchange", () => {
+  setTimeout(resizeCanvas, 100);
 });
 
 // --- Сеть ---
@@ -998,7 +1152,6 @@ onNetworkMessage((message) => {
   if (message.type === "gameAction") {
     runAction(message.action);
   } else if (message.type === "autoEndTurn") {
-    // Сервер пропустил ход пассивного места — применяем локально
     if (!state.gameOver && state.currentPlayer === message.playerId) {
       runAction({ kind: "endTurn", auto: true });
     }
@@ -1018,8 +1171,6 @@ onNetworkMessage((message) => {
       showGameOver(t("gameAbandoned"));
     }
   } else if (message.type === "opponentDisconnected") {
-    // Хост отключился: игра продолжается, но сохранение и возврат
-    // умрут вместе с его ключом — честно предупреждаем остальных
     if (message.playerId === 1) {
       setStickyStatus(
         `${t("hostOffline")} ${getRoomCode()} — ${t("noSaveResume")}`
@@ -1028,14 +1179,11 @@ onNetworkMessage((message) => {
       setNetStatus(t("opponentDisconnected"));
     }
   } else if (message.type === "opponentReconnected") {
-    // Хост вернулся в grace-окно — сохранение снова возможно
     if (message.playerId === 1) {
       setStickyStatus("");
     }
     setNetStatus("");
   } else if (message.type === "playerEliminated") {
-    // Место выбыло (бой, обрыв, решение хоста): убираем юнитов,
-    // нейтрализуем здания, сдвигаем очерёдность по подсказке сервера
     pendingEliminations.delete(message.playerId);
     eliminatePlayer(message.playerId, message.nextTurn);
     delete state.seatKinds[message.playerId];
@@ -1045,27 +1193,21 @@ onNetworkMessage((message) => {
     if (message.playerId === getMyPlayerId()) {
       showGameOver(t("eliminatedYou"));
     } else if (message.playerId === 1) {
-      // Хост выбыл окончательно: ключ возврата потерян навсегда
       setStickyStatus(`${t("hostEliminated")} — ${t("noSaveResume")}`);
     } else if (state.gameOver) {
       showGameOver();
     }
   } else if (message.type === "requestState") {
-    // Соперник вернулся — присылаем состояние, только если оно у нас есть
     if (state.map) {
       sendMessage({ type: "fullState", state: serializeState() });
     }
   } else if (message.type === "saveOk") {
-    // Хост получил ключ возврата — обновляем карточку сохранения
     upsertResumeCard(getRoomCode(), getMyPlayerId(), message.token);
     setNetStatus(t("gameSaved"));
     setTimeout(() => setNetStatus(""), 2500);
   } else if (message.type === "guestRequest") {
-    // Владелец пассив-места вернулся посреди партии:
-    // хост решает через панель заявок (без системного confirm)
     addGuestRequest(message);
   } else if (message.type === "playerReturned") {
-    // Сервер — источник истины о видах мест: принимаем реестр
     if (Array.isArray(message.seats)) {
       state.seatKinds = {};
 
@@ -1077,7 +1219,6 @@ onNetworkMessage((message) => {
     setNetStatus("");
     refreshGame();
   } else if (message.type === "gameOver") {
-    // Результат партии для всех, включая выбывших зрителей
     if (!state.gameOver) {
       state.gameOver = true;
       state.winner = message.winner;
@@ -1087,7 +1228,6 @@ onNetworkMessage((message) => {
   } else if (message.type === "fullState") {
     applyFullState(message.state);
 
-    // Резюм: устраняем выбранные хостом места и применяем виды мест
     if (pendingResume) {
       for (const id of pendingResume.eliminated) {
         eliminatePlayer(
@@ -1101,13 +1241,11 @@ onNetworkMessage((message) => {
     }
 
     showScreen("gameScreen");
+    layoutGameScreen();
 
-    if (!state.canvas) {
-      state.canvas = canvas;
-      state.ctx = ctx;
-    }
+    state.canvas = canvas;
+    state.ctx = ctx;
 
-    state.tileSize = canvas.width / state.map.length;
     initCamera();
 
     setNetStatus("");
@@ -1133,7 +1271,11 @@ initLobby({
     clearGuestRequests();
     setStickyStatus("");
 
-    // message.seats: [{ id, kind }] в игре и резюме
+    leaveArmed = false;
+    clearTimeout(leaveArmedTimer);
+    leaveGameBtn.classList.remove("danger");
+    leaveGameBtn.textContent = t("leaveGame");
+
     const seatIds = [];
     const seatKinds = {};
 
@@ -1148,7 +1290,6 @@ initLobby({
     }
 
     if (message.resume) {
-      // Резюм: состояние придёт следующим сообщением fullState
       pendingResume = {
         eliminated: message.eliminated || [],
         turn: message.turn,
@@ -1164,11 +1305,17 @@ initLobby({
     state.seatKinds = seatKinds;
 
     showScreen("gameScreen");
-    initCamera();
+    layoutGameScreen();
+
+    state.canvas = canvas;
+    state.ctx = ctx;
+
     initGame(canvas, ctx, {
       mapId: message.mapId,
       seats: seatIds
     });
+
+    initCamera();
     applyLanguage();
 
     saveGameSession(getRoomCode(), getMyPlayerId());

@@ -68,60 +68,52 @@ export function createUnit(id, type, owner, x, y, ready = true) {
   };
 }
 
-// Стартовые юниты для больших карт и любого числа игроков.
-// starts — { playerId: { x, y } } (замки из карты),
-// seats — массив id игроков в партии (например [1, 2] или [1, 2, 3, 4]),
-// terrain — двумерный массив местности (проверка проходимости клеток)
+// Стартовые юниты: смещения зеркалятся относительно центра карты,
+// чтобы тройка всех игроков появлялась со стороны ЦЕНТРА от замка.
+// Без зеркальности правые/нижние игроки получали фору или штраф
+// в несколько клеток хода (замечено: 4 / 5 / 7 ходов до нейтралей).
 export function createInitialUnits(starts, seats, terrain) {
   const units = [];
   let nextId = 1;
+  const size = terrain.length;
 
-  // Клетки вокруг замка, куда сажаем бойцов (по приоритету)
-  const offsets = [
-    { x: 0, y: 1 },
-    { x: 1, y: 1 },
-    { x: 1, y: 0 },
-    { x: 0, y: -1 },
-    { x: -1, y: -1 },
-    { x: -1, y: 0 },
-    { x: 1, y: -1 },
-    { x: -1, y: 1 }
-  ];
-
-  const types = ["militia", "archer", "swordsman"];
-
-  for (const playerId of seats) {
-    const start = starts[playerId];
-
-    if (!start) {
+  for (const start of starts) {
+    if (!seats.includes(start.owner)) {
       continue;
     }
 
-    for (const type of types) {
-      for (const off of offsets) {
-        const x = start.x + off.x;
-        const y = start.y + off.y;
+    const sx = start.x < size / 2 ? 1 : -1;
+    const sy = start.y < size / 2 ? 1 : -1;
 
-        // Не выходим за край карты
-        if (y < 0 || y >= terrain.length || x < 0 || x >= terrain.length) {
-          continue;
-        }
+    const offsets = [
+      { dx: sx, dy: 0, type: "swordsman" },
+      { dx: 0, dy: sy, type: "militia" },
+      { dx: sx, dy: sy, type: "archer" }
+    ];
 
-        // Не ставим на воду и горы
-        if (TERRAIN_COST[terrain[y][x]] === Infinity) {
-          continue;
-        }
+    for (const off of offsets) {
+      const x = start.x + off.dx;
+      const y = start.y + off.dy;
 
-        // Не ставим двух юнитов на одну клетку
-        if (units.some(u => u.x === x && u.y === y)) {
-          continue;
-        }
-
-        // Стартовые юниты активны сразу (ready = true)
-        units.push(createUnit(nextId, type, playerId, x, y, true));
-        nextId += 1;
-        break;
+      if (x < 0 || y < 0 || x >= size || y >= size) {
+        continue;
       }
+
+      if (units.some(u => u.x === x && u.y === y)) {
+        continue;
+      }
+
+      const unit = createUnit(nextId, off.type, start.owner, x, y, false);
+
+      // Юнит рождается «свежим»: createUnit по умолчанию создаёт
+      // уставшего (освежение обычно происходит передачей хода,
+      // но у первого игрока её нет — без этого сброса его юниты
+      // стояли полупрозрачными и не могли ходить на 1-м ходу)
+      unit.hasAttacked = false;
+      unit.movementLeft = UNIT_TYPES[off.type].movement;
+
+      units.push(unit);
+      nextId += 1;
     }
   }
 

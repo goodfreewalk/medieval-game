@@ -6,8 +6,7 @@
   <title>Средневековая стратегия</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏰</text></svg>">
   <script>
-    // Грузим Telegram SDK только если игра открыта внутри Telegram.
-    // В обычном браузере запрос не выполняется — страница открывается мгновенно.
+    // Грузим Telegram SDK только если игра открыта внутри Telegram
     if (window.Telegram || /Telegram/i.test(navigator.userAgent)) {
       const sdk = document.createElement("script");
       sdk.src = "https://telegram.org/js/telegram-web-app.js";
@@ -68,25 +67,26 @@
       <p id="lobbyStatus"></p>
     </section>
 
-    <!-- Игра -->
+    <!-- Игра: полноэкранный контейнер, HUD оверлеями -->
     <section id="gameScreen" class="hidden">
-      <button id="saveGameBtn">💾 Сохранить</button>
+      <div id="gameContainer">
+        <canvas id="game"></canvas>
+        <div id="netStatus"></div>
+        <div id="guestRequests"></div>
+      </div>
 
       <div id="topBar">
         <div id="turnInfo"></div>
         <div id="timer"></div>
         <button id="endTurn">Завершить ход</button>
+        <span class="menuGroup">
+          <button id="saveGameBtn">💾 Сохранить</button>
+          <button id="leaveGameBtn">Покинуть игру</button>
+        </span>
       </div>
 
       <div id="resources"></div>
       <div id="recruitPanel"></div>
-
-      <div id="gameContainer">
-        <div id="netStatus"></div>
-        <div id="guestRequests"></div>
-        <canvas id="game" width="1280" height="1280"></canvas>
-      </div>
-
       <p id="info">Кликни по клетке</p>
     </section>
 

@@ -464,7 +464,9 @@ function renderLobby() {
   addAggressiveBtn.textContent = t("addBotAggressive");
   addBalancedBtn.textContent = t("addBotBalanced");
 
-  readyBtn.textContent = myReady ? t("cancelReady") : t("ready");
+  // Тумблер: надпись показывает ТЕКУЩЕЕ состояние, а не действие
+  readyBtn.textContent = myReady ? t("ready") : t("notReady");
+  readyBtn.classList.toggle("readyOn", myReady);
   startBtn.textContent = t("startGame");
   startBtn.style.display = isHost ? "" : "none";
 
