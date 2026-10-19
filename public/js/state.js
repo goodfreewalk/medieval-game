@@ -38,6 +38,9 @@ export const state = {
   // Виды мест в текущей партии: { id: "human" | "passive" | "bot" }
   seatKinds: {},
 
+    // Отношения соперников к нам: { otherId: score } (приходит с сервера)
+  relations: {},
+
   gameOver: false,
   winner: null
 };
@@ -195,6 +198,7 @@ export function resetState() {
   state.owners = new Map();
   state.eliminated = new Set();
   state.seatKinds = {};
+  state.relations = {};
   state.currentPlayer = 1;
   state.selectedTile = null;
   state.selectedUnit = null;

@@ -65,10 +65,12 @@ const playAgainButton = document.getElementById("playAgainBtn");
 
 const netStatus = document.getElementById("netStatus");
 const guestRequests = document.getElementById("guestRequests");
-const pendingGuestRequests = new Map();
 const gameContainer = document.getElementById("gameContainer");
 
-// «Липкий» статус: важное постоянное сообщение (например, «хост отключился»)
+const pendingGuestRequests = new Map();
+
+// «Липкий» статус: важное постоянное сообщение (например, «хост отключился»).
+// Временные статусы его перекрывают, но при очистке оно возвращается.
 let stickyStatus = "";
 
 function setNetStatus(text) {
@@ -93,10 +95,16 @@ let timeLeft = TURN_TIME;
 
 // --- Служебное состояние клиента ---
 
+// Заявки на устранение, уже отправленные серверу (защита от спама)
 const pendingEliminations = new Set();
+
+// Данные резюма, ждущие fullState
 let pendingResume = null;
+
+// Защита от повторной отправки gameOver
 let gameOverSent = false;
 
+// Защита от случайного выхода: второе нажатие в течение 3 секунд
 let leaveArmed = false;
 let leaveArmedTimer = null;
 
@@ -167,140 +175,6 @@ function removeGuestRequest(guestId) {
 function clearGuestRequests() {
   guestRequests.innerHTML = "";
   pendingGuestRequests.clear();
-}
-
-// --- Камера (новая архитектура: мир в контексте, не в CSS) ---
-
-let fitZoom = 1;
-let minZoom = 0.25;
-let maxZoom = 3;
-
-// Инлайн-стили побеждают любой CSS: игровой экран = весь viewport,
-// контейнер карты = весь экран. Больше никаких «квадратов 892×892»
-function layoutGameScreen() {
-  const gameScreen = document.getElementById("gameScreen");
-
-  gameScreen.style.position = "fixed";
-  gameScreen.style.inset = "0";
-  gameScreen.style.overflow = "hidden";
-
-  gameContainer.style.position = "absolute";
-  gameContainer.style.inset = "0";
-  gameContainer.style.width = "auto";
-  gameContainer.style.height = "auto";
-  gameContainer.style.margin = "0";
-}
-
-function worldSize() {
-  return state.map ? state.map.length * state.tileSize : 0;
-}
-
-function computeFitZoom() {
-  const w = worldSize();
-
-  if (!w) {
-    return;
-  }
-
-  fitZoom = Math.min(state.viewW / w, state.viewH / w);
-  minZoom = fitZoom;
-  maxZoom = fitZoom * 4;
-}
-
-// Границы: карта целиком в кадре — центрируем; приближена — не утаскиваем за экран
-function clampCamera() {
-  const scaled = worldSize() * state.zoom;
-
-  if (scaled <= state.viewW) {
-    state.panX = (state.viewW - scaled) / 2;
-  } else {
-    const minX = state.viewW - scaled;
-    state.panX = Math.max(minX, Math.min(0, state.panX));
-  }
-
-  if (scaled <= state.viewH) {
-    state.panY = (state.viewH - scaled) / 2;
-  } else {
-    const minY = state.viewH - scaled;
-    state.panY = Math.max(minY, Math.min(0, state.panY));
-  }
-}
-
-// Canvas получает физический размер от контейнера (с dpr) —
-// никаких CSS-растягиваний и расхождений с атрибутами
-function resizeCanvas() {
-  const rect = gameContainer.getBoundingClientRect();
-
-  if (rect.width === 0 || rect.height === 0) {
-    return;
-  }
-
-  const dpr = window.devicePixelRatio || 1;
-
-  state.viewW = Math.round(rect.width);
-  state.viewH = Math.round(rect.height);
-  state.dpr = dpr;
-
-  canvas.width = Math.round(state.viewW * dpr);
-  canvas.height = Math.round(state.viewH * dpr);
-  canvas.style.width = `${state.viewW}px`;
-  canvas.style.height = `${state.viewH}px`;
-
-  if (state.map) {
-    computeFitZoom();
-    state.zoom = Math.max(minZoom, Math.min(maxZoom, state.zoom));
-    clampCamera();
-    drawGame();
-  }
-}
-
-function initCamera() {
-  resizeCanvas();
-
-  if (!state.map) {
-    return;
-  }
-
-  state.zoom = fitZoom;
-  clampCamera();
-  drawGame();
-}
-
-function zoomAt(localX, localY, newZoom) {
-  const clamped = Math.max(minZoom, Math.min(maxZoom, newZoom));
-  const worldX = (localX - state.panX) / state.zoom;
-  const worldY = (localY - state.panY) / state.zoom;
-
-  state.zoom = clamped;
-  state.panX = localX - worldX * state.zoom;
-  state.panY = localY - worldY * state.zoom;
-
-  clampCamera();
-  drawGame();
-}
-
-// Экранные координаты клика → клетка мира
-function screenToTile(event) {
-  if (!state.map) {
-    return null;
-  }
-
-  const rect = canvas.getBoundingClientRect();
-  const cssX = event.clientX - rect.left;
-  const cssY = event.clientY - rect.top;
-
-  const worldX = (cssX - state.panX) / state.zoom;
-  const worldY = (cssY - state.panY) / state.zoom;
-
-  const x = Math.floor(worldX / state.tileSize);
-  const y = Math.floor(worldY / state.tileSize);
-  const size = state.map.length;
-
-  if (x < 0 || x >= size || y < 0 || y >= size) {
-    return null;
-  }
-
-  return { x, y };
 }
 
 // --- Обновление интерфейса ---
@@ -457,6 +331,7 @@ function updateInfo() {
   info.textContent = t("infoDefault");
 }
 
+// Закрыть окно найма и снять выделение
 function closeRecruitPanel() {
   state.selectedTile = null;
   state.selectedUnit = null;
@@ -468,6 +343,7 @@ function closeRecruitPanel() {
   drawGame();
 }
 
+// Окно найма: полупрозрачное окно поверх карты с крестиком
 function updateRecruitPanel() {
   recruitPanel.innerHTML = "";
 
@@ -511,7 +387,7 @@ function updateRecruitPanel() {
     archer: "🏹",
     swordsman: "⚔️",
     lightCavalry: "🏇",
-    heavyCavalry: "🏇️️⚔️",
+    heavyCavalry: "🏇️️",
     horseArcher: "🏇🏹"
   };
 
@@ -556,6 +432,7 @@ function updateRecruitPanel() {
   }
 }
 
+// Боевое устранение: у места не осталось ни юнитов, ни зданий
 function detectEliminations() {
   if (!state.map || state.gameOver) {
     return;
@@ -591,6 +468,7 @@ function detectEliminations() {
 }
 
 function refreshGame() {
+
   updateTurnInfo();
   updateResources();
   updateRecruitPanel();
@@ -630,6 +508,8 @@ function showGameOver(reason) {
   stopTurnTimer();
   clearGuestRequests();
 
+  // При потере соединения сессию НЕ чистим: после перезагрузки
+  // страницы игрок сможет вернуться в ещё живую комнату
   if (reason !== t("connectionLost")) {
     clearGameSession();
   }
@@ -658,6 +538,8 @@ function showGameOver(reason) {
   }
 }
 
+// --- Обработка выхода соперника ---
+
 function handleOpponentLeft() {
   if (state.gameOver) {
     return;
@@ -667,6 +549,8 @@ function handleOpponentLeft() {
   state.winner = getMyPlayerId();
   showGameOver(t("opponentLeft"));
 }
+
+// --- Обработка потери соединения ---
 
 function handleConnectionLost() {
   stopTurnTimer();
@@ -691,6 +575,8 @@ function handleConnectionLost() {
 
   showGameOver(t("connectionLost"));
 }
+
+// --- Выход из партии в главное меню ---
 
 function leaveGame() {
   if (!leaveArmed) {
@@ -848,6 +734,195 @@ function runAction(action) {
   }
 
   return false;
+}
+
+// --- Камера (мир в контексте, не в CSS) ---
+
+let fitZoom = 1;
+let minZoom = 0.25;
+let maxZoom = 3;
+
+// На телефоне в портрете вписанный вид делает клетки мелкими,
+// поэтому стартуем с приближения и центрируем на столице игрока
+const MOBILE_ZOOM = 1.6;
+
+// Инлайн-стили побеждают любой CSS: игровой экран = весь viewport,
+// контейнер карты = весь экран
+function layoutGameScreen() {
+  const gameScreen = document.getElementById("gameScreen");
+
+  gameScreen.style.position = "fixed";
+  gameScreen.style.inset = "0";
+  gameScreen.style.overflow = "hidden";
+
+  gameContainer.style.position = "absolute";
+  gameContainer.style.inset = "0";
+  gameContainer.style.width = "auto";
+  gameContainer.style.height = "auto";
+  gameContainer.style.margin = "0";
+}
+
+function worldSize() {
+  return state.map ? state.map.length * state.tileSize : 0;
+}
+
+function isPortrait() {
+  return state.viewH > state.viewW;
+}
+
+function computeFitZoom() {
+  const w = worldSize();
+
+  if (!w) {
+    return;
+  }
+
+  fitZoom = Math.min(state.viewW / w, state.viewH / w);
+  minZoom = fitZoom;
+  // Потолок зума (твоя настройка: ×4). Подними цифру, если нужно сильнее
+  maxZoom = fitZoom * 4;
+}
+
+// Границы: карта целиком в кадре — центрируем; приближена — не утаскиваем за экран
+function clampCamera() {
+  const scaled = worldSize() * state.zoom;
+
+  if (scaled <= state.viewW) {
+    state.panX = (state.viewW - scaled) / 2;
+  } else {
+    const minX = state.viewW - scaled;
+    state.panX = Math.max(minX, Math.min(0, state.panX));
+  }
+
+  if (scaled <= state.viewH) {
+    state.panY = (state.viewH - scaled) / 2;
+  } else {
+    const minY = state.viewH - scaled;
+    state.panY = Math.max(minY, Math.min(0, state.panY));
+  }
+}
+
+// Центр столицы текущего игрока в мировых координатах (px);
+// фолбэк — центр мира, если замок не найден
+function capitalWorldPoint() {
+  const me = getMyPlayerId();
+  const size = state.map.length;
+
+  if (me) {
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        if (
+          state.map[y][x] === TERRAIN.CASTLE &&
+          getTileOwner(x, y) === me
+        ) {
+          return {
+            x: x * state.tileSize + state.tileSize / 2,
+            y: y * state.tileSize + state.tileSize / 2
+          };
+        }
+      }
+    }
+  }
+
+  const half = worldSize() / 2;
+  return { x: half, y: half };
+}
+
+// Применение режима камеры:
+//  - портрет + centerOnCapital: приближение и центр на столице игрока;
+//  - иначе (десктоп/ландшафт): вписанный вид по центру мира.
+function applyCameraMode(centerOnCapital) {
+  if (!state.map) {
+    return;
+  }
+
+  computeFitZoom();
+
+  if (centerOnCapital && isPortrait()) {
+    state.zoom = Math.min(maxZoom, fitZoom * MOBILE_ZOOM);
+    const cap = capitalWorldPoint();
+    state.panX = state.viewW / 2 - cap.x * state.zoom;
+    state.panY = state.viewH / 2 - cap.y * state.zoom;
+  } else {
+    state.zoom = fitZoom;
+    const scaled = worldSize() * state.zoom;
+    state.panX = (state.viewW - scaled) / 2;
+    state.panY = (state.viewH - scaled) / 2;
+  }
+
+  clampCamera();
+  drawGame();
+}
+
+// Canvas получает физический размер от контейнера (с dpr).
+// Обычный ресайз окна границы пересчитывает, но позицию НЕ сбрасывает,
+// чтобы не дёргать камеру игрока на каждый resize.
+function resizeCanvas() {
+  const rect = gameContainer.getBoundingClientRect();
+
+  if (rect.width === 0 || rect.height === 0) {
+    return;
+  }
+
+  const dpr = window.devicePixelRatio || 1;
+
+  state.viewW = Math.round(rect.width);
+  state.viewH = Math.round(rect.height);
+  state.dpr = dpr;
+
+  canvas.width = Math.round(state.viewW * dpr);
+  canvas.height = Math.round(state.viewH * dpr);
+  canvas.style.width = `${state.viewW}px`;
+  canvas.style.height = `${state.viewH}px`;
+
+  if (state.map) {
+    computeFitZoom();
+    state.zoom = Math.max(minZoom, Math.min(maxZoom, state.zoom));
+    clampCamera();
+    drawGame();
+  }
+}
+
+function initCamera() {
+  resizeCanvas();
+  applyCameraMode(true);
+}
+
+function zoomAt(localX, localY, newZoom) {
+  const clamped = Math.max(minZoom, Math.min(maxZoom, newZoom));
+  const worldX = (localX - state.panX) / state.zoom;
+  const worldY = (localY - state.panY) / state.zoom;
+
+  state.zoom = clamped;
+  state.panX = localX - worldX * state.zoom;
+  state.panY = localY - worldY * state.zoom;
+
+  clampCamera();
+  drawGame();
+}
+
+// Экранные координаты клика → клетка мира
+function screenToTile(event) {
+  if (!state.map) {
+    return null;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  const cssX = event.clientX - rect.left;
+  const cssY = event.clientY - rect.top;
+
+  const worldX = (cssX - state.panX) / state.zoom;
+  const worldY = (cssY - state.panY) / state.zoom;
+
+  const x = Math.floor(worldX / state.tileSize);
+  const y = Math.floor(worldY / state.tileSize);
+  const size = state.map.length;
+
+  if (x < 0 || x >= size || y < 0 || y >= size) {
+    return null;
+  }
+
+  return { x, y };
 }
 
 // --- Жесты и мышь ---
@@ -1138,12 +1213,18 @@ playAgainButton.addEventListener("click", () => {
 
 // --- Ресайз окна / ориентации ---
 
+// Обычный ресайз: пересчёт границ без сброса позиции камеры
 window.addEventListener("resize", () => {
   resizeCanvas();
 });
 
+// Поворот экрана: режим меняется (портрет <-> ландшафт) —
+// пересчитываем границы и заново выбираем центр (столица / весь мир)
 window.addEventListener("orientationchange", () => {
-  setTimeout(resizeCanvas, 100);
+  setTimeout(() => {
+    resizeCanvas();
+    applyCameraMode(true);
+  }, 100);
 });
 
 // --- Сеть ---

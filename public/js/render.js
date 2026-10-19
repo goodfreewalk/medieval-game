@@ -23,6 +23,11 @@ const UNIT_ICONS = {
   heavyCavalry: "🏇️️⚔️",
   horseArcher: "🏇🏹"
 };
+// Конница рисуется композиционно: лошадь целиком + бейдж оружия/лука
+// в правом верхнем квадранте (склеенные эмодзи сжимали лошадь)
+const CAVALRY_TYPES = new Set(["lightCavalry", "heavyCavalry", "horseArcher"]);
+const CAVALRY_BASE = "🏇";
+const UNIT_BADGE = { heavyCavalry: "⚔️", horseArcher: "🏹" };
 
 const EMOJI_FONT =
   '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", serif';
@@ -282,11 +287,29 @@ function drawFrame() {
       ctx.stroke();
     }
 
-    const icon = UNIT_ICONS[unit.type];
+    const R = T * 0.30;
 
-    if (icon) {
-      const s = T * 0.46;
-      ctx.drawImage(getSprite(icon), cx - s / 2, cy - s / 2 - T * 0.02, s, s);
+    if (CAVALRY_TYPES.has(unit.type)) {
+      // Лошадь со всадником — целиком по центру круга
+      const bs = T * 0.52;
+      ctx.drawImage(getSprite(CAVALRY_BASE), cx - bs / 2, cy - bs / 2, bs, bs);
+
+      // Бейдж (лук / меч) — в правом верхнем квадранте, меньше
+      const badge = UNIT_BADGE[unit.type];
+
+      if (badge) {
+        const gd = T * 0.30;
+        const gx = cx + R * 0.42;
+        const gy = cy - R * 0.42;
+        ctx.drawImage(getSprite(badge), gx - gd / 2, gy - gd / 2, gd, gd);
+      }
+    } else {
+      const icon = UNIT_ICONS[unit.type];
+
+      if (icon) {
+        const s = T * 0.46;
+        ctx.drawImage(getSprite(icon), cx - s / 2, cy - s / 2 - T * 0.02, s, s);
+      }
     }
 
     // Здоровье под кругом (обычный текст: цифры дёшевы)

@@ -605,3 +605,50 @@ select:focus {
   box-shadow: 0 3px 0 #1d5427, 0 6px 14px rgba(0, 0, 0, 0.35);
   color: #ffffff;
 }
+
+/* ===== Мобильная развязка HUD: убираем наложение верхней панели ===== */
+@media (max-width: 720px) {
+  /* топбар — строкой ниже ресурсов, на всю ширину, кнопки переносятся */
+  #topBar {
+    top: 70px;
+    left: 8px;
+    right: 8px;
+    transform: none;
+    max-width: none;
+  }
+
+  /* ресурсы компактнее, чтобы влезли в одну строку с языком */
+  #resources {
+    gap: 6px;
+  }
+
+  .statCard {
+    padding: 5px 7px;
+  }
+
+  .statIcon {
+    font-size: 16px;
+  }
+
+  .statValue {
+    font-size: 14px;
+  }
+
+  .statLabel {
+    font-size: 10px;
+  }
+
+  /* статусы и заявки — в нижнюю зону, чтобы не спорить с верхом */
+  #netStatus {
+    top: auto;
+    bottom: 56px;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  #guestRequests {
+    top: auto;
+    bottom: 96px;
+    left: 8px;
+  }
+}
