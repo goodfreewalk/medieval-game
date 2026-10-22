@@ -382,13 +382,14 @@ function updateRecruitPanel() {
 
   const terrain = state.map[tile.y][tile.x];
 
+  // Конница — раздельными эмодзи (лошадь + оружие), как на карте
   const icons = {
     militia: "🪓",
     archer: "🏹",
     swordsman: "⚔️",
     lightCavalry: "🏇",
-    heavyCavalry: "🏇️️",
-    horseArcher: "🏇🏹"
+    heavyCavalry: "🏇 ⚔️",
+    horseArcher: "🏇 "
   };
 
   const types = terrain === TERRAIN.VILLAGE
@@ -468,7 +469,6 @@ function detectEliminations() {
 }
 
 function refreshGame() {
-
   updateTurnInfo();
   updateResources();
   updateRecruitPanel();

@@ -67,7 +67,7 @@
       <p id="lobbyStatus"></p>
     </section>
 
-    <!-- Игра: полноэкранный контейнер, HUD оверлеями -->
+    <!-- Игра: карта во весь экран, HUD в морских полях -->
     <section id="gameScreen" class="hidden">
       <div id="gameContainer">
         <canvas id="game"></canvas>
@@ -75,19 +75,28 @@
         <div id="guestRequests"></div>
       </div>
 
-      <div id="topBar">
-        <div id="turnInfo"></div>
-        <div id="timer"></div>
-        <button id="endTurn">Завершить ход</button>
-        <span class="menuGroup">
-          <button id="saveGameBtn">💾 Сохранить</button>
-          <button id="leaveGameBtn">Покинуть игру</button>
-        </span>
+      <!-- Информационная сторона: ресурсы + инфо о клетке/юните -->
+      <div id="hudSideA">
+        <div id="resources"></div>
+        <div id="infoBox">
+          <p id="info">Кликни по клетке</p>
+        </div>
       </div>
 
-      <div id="resources"></div>
+      <!-- Управленческая сторона: ход + таймер + кнопки -->
+      <div id="hudSideB">
+        <div id="turnRow">
+          <div id="turnInfo"></div>
+          <div id="timer"></div>
+          <button id="endTurn">Завершить ход</button>
+        </div>
+        <div id="menuRow">
+          <button id="saveGameBtn">💾 Сохранить</button>
+          <button id="leaveGameBtn">Покинуть игру</button>
+        </div>
+      </div>
+
       <div id="recruitPanel"></div>
-      <p id="info">Кликни по клетке</p>
     </section>
 
     <!-- Оверлей завершения игры -->
