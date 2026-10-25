@@ -37,8 +37,7 @@ export const state = {
   eliminated: new Set(),
   // Виды мест в текущей партии: { id: "human" | "passive" | "bot" }
   seatKinds: {},
-
-    // Отношения соперников к нам: { otherId: score } (приходит с сервера)
+  // Отношения соперников к нам: { otherId: score } (приходит с сервера)
   relations: {},
 
   gameOver: false,
@@ -186,8 +185,52 @@ export function getSupplyUsed(owner) {
   return state.units.filter(unit => unit.owner === owner).length;
 }
 
+// Регенерация в начале своего хода на СОБСТВЕННЫХ зданиях:
+//   спокойно:    замок +10, деревня +5
+//   под осаде:   замок +5,  деревня +2  (юнит терял HP с прошлого своего хода)
+const REGEN_CASTLE = 10;
+const REGEN_VILLAGE = 5;
+const REGEN_CASTLE_SIEGE = 5;
+const REGEN_VILLAGE_SIEGE = 2;
+
+function applyRegeneration(owner) {
+  if (!state.map) {
+    return;
+  }
+
+  for (const unit of state.units) {
+    if (unit.owner !== owner) {
+      continue;
+    }
+
+    const terrain = state.map[unit.y][unit.x];
+
+    if (terrain !== TERRAIN.CASTLE && terrain !== TERRAIN.VILLAGE) {
+      continue;
+    }
+
+    if (getTileOwner(unit.x, unit.y) !== owner) {
+      continue;
+    }
+
+    const siege = !!unit.lastHit;
+    const heal = terrain === TERRAIN.CASTLE
+      ? (siege ? REGEN_CASTLE_SIEGE : REGEN_CASTLE)
+      : (siege ? REGEN_VILLAGE_SIEGE : REGEN_VILLAGE);
+    const cap = unit.maxHp || 100;
+
+    if (unit.hp < cap) {
+      unit.hp = Math.min(cap, unit.hp + heal);
+    }
+
+    // Флаг «под обстрелом» живёт ровно до начала своего хода
+    unit.lastHit = false;
+  }
+}
+
 export function collectIncome(owner) {
   state.players[owner].gold += getIncome(owner);
+  applyRegeneration(owner);
 }
 
 // Полный сброс клиентского состояния (выход в меню без перезагрузки)

@@ -470,6 +470,7 @@ function detectEliminations() {
 
 function refreshGame() {
   updateTurnInfo();
+  resourcesElement.style.display = getMyPlayerId() ? "" : "none";
   updateResources();
   updateRecruitPanel();
   updateInfo();
@@ -1377,8 +1378,10 @@ initLobby({
         seatKinds
       };
 
-      saveGameSession(getRoomCode(), getMyPlayerId());
-      upsertResumeCard(getRoomCode(), getMyPlayerId(), null);
+      if (getMyPlayerId()) {
+        saveGameSession(getRoomCode(), getMyPlayerId());
+        upsertResumeCard(getRoomCode(), getMyPlayerId(), null);
+      }
       applyLanguage();
       return;
     }
@@ -1399,8 +1402,10 @@ initLobby({
     initCamera();
     applyLanguage();
 
-    saveGameSession(getRoomCode(), getMyPlayerId());
-    upsertResumeCard(getRoomCode(), getMyPlayerId(), null);
+    if (getMyPlayerId()) {
+      saveGameSession(getRoomCode(), getMyPlayerId());
+      upsertResumeCard(getRoomCode(), getMyPlayerId(), null);
+    }
 
     if (isMyTurn()) {
       startTurnTimer();

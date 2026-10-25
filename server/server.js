@@ -7,6 +7,7 @@ import { WebSocketServer } from "ws";
 
 import { state, initGame } from "../public/js/state.js";
 import { TERRAIN } from "../public/js/terrain.js";
+import { getMapById } from "../public/js/maps.js";
 import {
   applyMove,
   applyAttack,
@@ -21,9 +22,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 8080;
 const MAX_PLAYERS = 4;
+const MAX_SPECTATORS = 4;
 
 const SAVES_DIR = path.join(__dirname, "..", "saves");
-const SAVE_VERSION = 2; // v2: в сейве появились relations
+const SAVE_VERSION = 2;
 const SAVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 fs.mkdirSync(SAVES_DIR, { recursive: true });
 
@@ -34,12 +36,27 @@ const BOT_MAX_STEPS = 40;
 const RECONNECT_GRACE_MS = 60000;
 const STATE_FALLBACK_MS = 3000;
 
-// ---------- Параметры отношений ----------
 const REL_MIN = -100;
 const REL_MAX = 100;
 const REL_DECAY = 0.97;
 const REL_PARDON = 2;
 const PARDON_PROX = 3;
+
+const ROOM_CODE_RE = /^[A-Z0-9]{4}$/;
+
+function safeCode(raw) {
+  const code = String(raw || "").toUpperCase();
+  return ROOM_CODE_RE.test(code) ? code : null;
+}
+
+// Вместимость текущей карты комнаты (максимум мест)
+function mapMaxSeats(room) {
+  const def = getMapById(room.mapId);
+  const arr = def && Array.isArray(def.players) && def.players.length
+    ? def.players
+    : [2];
+  return Math.min(MAX_PLAYERS, arr[arr.length - 1]);
+}
 
 const app = express();
 
@@ -47,6 +64,8 @@ app.use(
   express.static(path.join(__dirname, "..", "public"), {
     setHeaders: (res) => {
       res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("X-Frame-Options", "DENY");
     }
   })
 );
@@ -227,7 +246,6 @@ function snapshotBuildingOwners() {
   return map;
 }
 
-// Применяет действие к зеркалу И обновляет отношения по событиям
 function applyActionWithRelations(room, action, meId) {
   loadMirror(room);
 
@@ -291,9 +309,10 @@ function generateRoomCode() {
 
 function broadcastToRoom(room, message) {
   const text = JSON.stringify(message);
-  for (const player of room.players) {
+  const targets = [...room.players, ...(room.spectators || [])];
+  for (const slot of targets) {
     try {
-      if (player.ws && player.ws.readyState === 1) player.ws.send(text);
+      if (slot.ws && slot.ws.readyState === 1) slot.ws.send(text);
     } catch (error) {
       console.error("Не удалось отправить сообщение:", error.message);
     }
@@ -315,6 +334,7 @@ function sendRoomUpdate(room) {
     resumeLobby: !!room.resumeLobby,
     seatDraft: room.seatDraft || null,
     bots: room.lobbyBots || null,
+    spectators: (room.spectators || []).map(s => ({ id: s.id, name: s.name })),
     saveInfo: room.saveData
       ? { seats: room.saveData.players, turn: room.saveData.turn }
       : null,
@@ -344,7 +364,6 @@ function armTurnDriver(room) {
   if (room.phase !== "game" || !room.mirror) return;
 
   const kind = seatKind(room, room.turn);
-    console.log(`[driver] ход у места ${room.turn}, тип: ${kind}`);
 
   if (kind === "passive") {
     room.autoTimer = setTimeout(() => {
@@ -402,20 +421,15 @@ function botStep(room) {
       return;
     }
 
-    // Делать больше нечего — завершаем ход
     const endAction = { kind: "endTurn" };
     applyActionWithRelations(room, endAction, me);
     endAction.next = room.mirror.currentPlayer;
-
     broadcastToRoom(room, { type: "gameAction", action: endAction });
     room.turn = endAction.next;
     sendRelations(room);
     armTurnDriver(room);
   } catch (error) {
-    // Планер бота упал: пишем причину и НЕ даём партии зависнуть —
-    // принудительно завершаем ход бота, чтобы очередь поехала дальше
-    console.error(`[bot] место ${me} упало в планере:`, error && error.stack || error);
-
+    console.error(`[bot] место ${me} упало в планере:`, (error && error.stack) || error);
     try {
       const endAction = { kind: "endTurn" };
       applyActionWithRelations(room, endAction, me);
@@ -424,7 +438,7 @@ function botStep(room) {
       room.turn = endAction.next;
       armTurnDriver(room);
     } catch (fatal) {
-      console.error(`[bot] место ${me}: не удалось даже завершить ход:`, fatal && fatal.stack || fatal);
+      console.error(`[bot] место ${me}: не удалось завершить ход:`, (fatal && fatal.stack) || fatal);
     }
   }
 }
@@ -487,7 +501,7 @@ function eliminateSeat(room, code, playerId) {
   sendRelations(room);
   armTurnDriver(room);
 
-  if (room.players.length === 0 && (room.guests || []).length === 0) {
+  if (room.players.length === 0 && (room.guests || []).length === 0 && (room.spectators || []).length === 0) {
     rooms.delete(code);
     console.log(`Комната ${code} пуста после устранения`);
   } else {
@@ -513,6 +527,7 @@ wss.on("connection", (ws) => {
   ws.roomCode = null;
   ws.playerId = null;
   ws.guestId = null;
+  ws.spectatorId = null;
   ws.isAlive = true;
 
   ws.on("pong", () => { ws.isAlive = true; });
@@ -528,12 +543,14 @@ wss.on("connection", (ws) => {
       const room = {
         players: [],
         guests: [],
+        spectators: [],
         lobbyBots: [],
         phase: "lobby",
         resumeLobby: false,
         turn: 1,
         mapId: "classic",
         nextGuestId: 1,
+        nextSpectatorId: 1,
         relations: {},
         lastTurnAttacked: new Set()
       };
@@ -554,30 +571,33 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // ---------- Боты в новом лобби ----------
-    if (message.type === "addBot") {
+    // ---------- Назначение места хостом (селект в лобби) ----------
+    if (message.type === "setLobbySeat") {
       const room = getRoom(ws);
-      if (!room || room.phase !== "lobby" || room.resumeLobby) return;
-      if (ws.playerId !== 1) return;
-      if (room.players.length + room.lobbyBots.length >= MAX_PLAYERS) return;
+      if (!room || room.phase !== "lobby" || room.resumeLobby || ws.playerId !== 1) return;
+      const seatId = message.seatId;
+      const maxSeats = mapMaxSeats(room);
+      if (!Number.isInteger(seatId) || seatId < 2 || seatId > maxSeats) return;
+      if (room.players.some(p => p.id === seatId)) return; // место занято человеком
 
-      const personality = message.personality === "aggressive" ? "aggressive" : "balanced";
-      const usedIds = [...room.players.map(p => p.id), ...room.lobbyBots.map(b => b.id)];
-      let newId = null;
-      for (let id = 1; id <= MAX_PLAYERS; id++) if (!usedIds.includes(id)) { newId = id; break; }
+      const kind = message.kind; // "bot" | "spectator" | "none"
+      room.lobbyBots = room.lobbyBots.filter(b => b.id !== seatId);
 
-      room.lobbyBots.push({ id: newId, personality });
+      if (kind === "bot") {
+        const personality = message.personality === "aggressive" ? "aggressive" : "balanced";
+        room.lobbyBots.push({ id: seatId, personality });
+      } else if (kind === "spectator") {
+        const spec = (room.spectators || []).find(s => s.id === message.spectatorId);
+        if (!spec) return;
+        room.spectators = room.spectators.filter(s => s !== spec);
+        room.players.push({ ws: spec.ws, id: seatId, name: spec.name, ready: false, hasState: false });
+        spec.ws.playerId = seatId;
+        spec.ws.spectatorId = null;
+        sendTo(spec.ws, { type: "roomJoined", roomCode: spec.ws.roomCode, playerId: seatId, mapId: room.mapId });
+      }
+
       sendRoomUpdate(room);
-      console.log(`Бот ${newId} (${personality}) добавлен в комнату ${ws.roomCode}`);
-      return;
-    }
-
-    if (message.type === "removeBot") {
-      const room = getRoom(ws);
-      if (!room || room.phase !== "lobby" || room.resumeLobby) return;
-      if (ws.playerId !== 1) return;
-      room.lobbyBots = room.lobbyBots.filter(b => b.id !== message.botId);
-      sendRoomUpdate(room);
+      console.log(`Место ${seatId} в комнате ${ws.roomCode}: ${kind}`);
       return;
     }
 
@@ -613,7 +633,8 @@ wss.on("connection", (ws) => {
 
     // ---------- Возобновление ----------
     if (message.type === "resumeGame") {
-      const code = String(message.roomCode || "").toUpperCase();
+      const code = safeCode(message.roomCode);
+      if (!code) { sendTo(ws, { type: "error", code: "roomNotFound" }); return; }
 
       if (rooms.has(code)) {
         const existing = rooms.get(code);
@@ -662,6 +683,7 @@ wss.on("connection", (ws) => {
       const room = {
         players: [],
         guests: [],
+        spectators: [],
         lobbyBots: [],
         phase: "lobby",
         resumeLobby: true,
@@ -669,6 +691,7 @@ wss.on("connection", (ws) => {
         mapId: save.mapId,
         turn: save.turn,
         nextGuestId: 1,
+        nextSpectatorId: 1,
         seatDraft: {},
         relations: save.relations || {},
         lastTurnAttacked: new Set()
@@ -697,9 +720,10 @@ wss.on("connection", (ws) => {
 
     // ---------- Вход в комнату ----------
     if (message.type === "joinRoom") {
-      const room = rooms.get(message.roomCode);
+      const code = safeCode(message.roomCode);
+      const room = code ? rooms.get(code) : null;
       if (!room) {
-        const { save } = readSave(message.roomCode);
+        const { save } = readSave(code || "");
         sendTo(ws, { type: "error", code: save ? "resumeNotOpened" : "roomNotFound" });
         return;
       }
@@ -718,10 +742,10 @@ wss.on("connection", (ws) => {
             slot.hasState = false;
             clearTimeout(slot.disconnectTimer);
             slot.disconnectTimer = null;
-            ws.roomCode = message.roomCode;
+            ws.roomCode = code;
             ws.playerId = wanted;
 
-            sendTo(ws, { type: "rejoinOk", playerId: wanted, roomCode: message.roomCode });
+            sendTo(ws, { type: "rejoinOk", playerId: wanted, roomCode: code });
             for (const player of room.players) {
               if (player.id !== wanted) sendTo(player.ws, { type: "opponentReconnected", playerId: wanted });
             }
@@ -729,7 +753,7 @@ wss.on("connection", (ws) => {
             for (const player of room.players) {
               if (player.id !== wanted) sendTo(player.ws, { type: "requestState" });
             }
-            armStateFallback(room, wanted, message.roomCode);
+            armStateFallback(room, wanted, code);
             sendRelations(room);
             return;
           }
@@ -740,7 +764,7 @@ wss.on("connection", (ws) => {
         if (seat && seat.kind === "passive") {
           const guestId = room.nextGuestId++;
           room.guests.push({ ws, guestId, name, requestedSeat: wanted });
-          ws.roomCode = message.roomCode;
+          ws.roomCode = code;
           ws.guestId = guestId;
           sendTo(ws, { type: "waitingApproval" });
           const host = room.players.find(p => p.id === 1);
@@ -759,23 +783,51 @@ wss.on("connection", (ws) => {
         let autoSeated = false;
         if (draft && draft.kind === "passive") { draft.kind = "human"; draft.guestId = guestId; autoSeated = true; }
         room.guests.push({ ws, guestId, name, requestedSeat: autoSeated ? preferred : null });
-        ws.roomCode = message.roomCode;
+        ws.roomCode = code;
         ws.guestId = guestId;
-        sendTo(ws, { type: "roomJoined", roomCode: message.roomCode, playerId: null, guestId, mapId: room.mapId, resumeLobby: true });
+        sendTo(ws, { type: "roomJoined", roomCode: code, playerId: null, guestId, mapId: room.mapId, resumeLobby: true });
         sendRoomUpdate(room);
         return;
       }
 
-      if (room.players.length >= MAX_PLAYERS) { sendTo(ws, { type: "error", code: "roomFull" }); return; }
-      const usedIds = room.players.map(p => p.id);
+      // Новое лобби: свободное место В ПРЕДЕЛАХ вместимости карты -> авто-посадка
+      const maxSeats = mapMaxSeats(room);
+      const usedIds = [
+        ...room.players.map(p => p.id),
+        ...room.lobbyBots.map(b => b.id)
+      ];
       let newId = null;
-      for (let id = 1; id <= MAX_PLAYERS; id++) if (!usedIds.includes(id)) { newId = id; break; }
-      room.players.push({ ws, id: newId, name, ready: false, hasState: false });
-      ws.roomCode = message.roomCode;
-      ws.playerId = newId;
-      sendTo(ws, { type: "roomJoined", roomCode: message.roomCode, playerId: newId, mapId: room.mapId });
+      for (let id = 1; id <= maxSeats; id++) {
+        if (!usedIds.includes(id)) { newId = id; break; }
+      }
+
+      if (newId !== null) {
+        room.players.push({ ws, id: newId, name, ready: false, hasState: false });
+        ws.roomCode = code;
+        ws.playerId = newId;
+        sendTo(ws, { type: "roomJoined", roomCode: code, playerId: newId, mapId: room.mapId });
+        sendRoomUpdate(room);
+        console.log(`Игрок ${newId} зашёл в комнату ${code}`);
+        return;
+      }
+
+      // Мест нет: наблюдатель (лимит MAX_SPECTATORS)
+      if ((room.spectators || []).length >= MAX_SPECTATORS) {
+        sendTo(ws, { type: "error", code: "spectatorsFull" });
+        return;
+      }
+
+      const spectatorId = room.nextSpectatorId++;
+      room.spectators.push({ ws, id: spectatorId, name });
+      ws.roomCode = code;
+      ws.spectatorId = spectatorId;
+      sendTo(ws, { type: "roomJoined", roomCode: code, playerId: null, spectatorId, mapId: room.mapId });
       sendRoomUpdate(room);
-      console.log(`Игрок ${newId} зашёл в комнату ${message.roomCode}`);
+
+      // Хосту — только информационное сообщение, без кнопок
+      const host = room.players.find(p => p.id === 1);
+      sendTo(host && host.ws, { type: "spectatorJoined", spectatorId, name });
+      console.log(`Наблюдатель ${spectatorId} (${name}) в комнате ${code}`);
       return;
     }
 
@@ -795,6 +847,20 @@ wss.on("connection", (ws) => {
       if (!room || room.phase !== "lobby" || ws.playerId !== 1) return;
       if (room.resumeLobby || room.saveData) return;
       room.mapId = String(message.mapId || "classic").slice(0, 32);
+
+      // Смена карты на меньшую вместимость: срезаем лишние места
+      const maxSeats = mapMaxSeats(room);
+      room.lobbyBots = room.lobbyBots.filter(b => b.id <= maxSeats);
+      const excess = room.players.filter(p => p.id !== 1 && p.id > maxSeats);
+      for (const p of excess) {
+        const spectatorId = room.nextSpectatorId++;
+        room.spectators.push({ ws: p.ws, id: spectatorId, name: p.name });
+        p.ws.playerId = null;
+        p.ws.spectatorId = spectatorId;
+        sendTo(p.ws, { type: "roomJoined", roomCode: p.ws.roomCode, playerId: null, spectatorId, mapId: room.mapId });
+      }
+      room.players = room.players.filter(p => p.id === 1 || p.id <= maxSeats);
+
       sendRoomUpdate(room);
       return;
     }
@@ -833,8 +899,21 @@ wss.on("connection", (ws) => {
         ...room.players.map(p => ({ id: p.id, kind: "human" })),
         ...room.lobbyBots.map(b => ({ id: b.id, kind: "bot", personality: b.personality }))
       ];
-      if (seats.length < 2 || seats.length > MAX_PLAYERS) return;
+
+      const mapDef = getMapById(room.mapId);
+      const maxSeats = mapMaxSeats(room);
+
+      if (seats.length < 2 || seats.length > maxSeats) return;
+      if (!mapDef.players.includes(seats.length)) return;
+      if (seats.some(s => s.id > maxSeats)) return;
       if (!room.players.every(p => p.ready)) return;
+
+      const uniq = new Set(seats.map(s => s.id));
+      if (uniq.size !== seats.length) {
+        console.error(`Старт отклонён: дубли мест в комнате ${ws.roomCode}`);
+        sendTo(ws, { type: "error", code: "roomFull" });
+        return;
+      }
 
       room.phase = "game";
       room.turn = 1;
@@ -993,7 +1072,7 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // ---------- Выход из комнаты ----------
+    // ---------- Выход ----------
     if (message.type === "leaveRoom") {
       const code = ws.roomCode;
       const room = getRoom(ws);
@@ -1001,17 +1080,26 @@ wss.on("connection", (ws) => {
       const playerId = ws.playerId;
       ws.roomCode = null;
       ws.playerId = null;
+
+      if (ws.spectatorId !== null && playerId === null) {
+        room.spectators = (room.spectators || []).filter(s => s.ws !== ws);
+        ws.spectatorId = null;
+        sendRoomUpdate(room);
+        return;
+      }
+
       room.players = room.players.filter(p => p.ws !== ws);
 
       if (room.phase === "lobby") {
         if (playerId === 1) {
           for (const player of room.players) sendTo(player.ws, { type: "roomClosed", code: "hostLeft" });
           for (const guest of room.guests || []) sendTo(guest.ws, { type: "roomClosed", code: "hostLeft" });
+          for (const spec of room.spectators || []) sendTo(spec.ws, { type: "roomClosed", code: "hostLeft" });
           rooms.delete(code);
           console.log(`Комната ${code} закрыта: хост вышел`);
         } else {
           sendRoomUpdate(room);
-          if (room.players.length === 0 && (room.guests || []).length === 0) rooms.delete(code);
+          if (room.players.length === 0 && (room.guests || []).length === 0 && (room.spectators || []).length === 0) rooms.delete(code);
         }
       } else {
         eliminateSeat(room, code, playerId);
@@ -1060,13 +1148,23 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // ---------- Боевое устранение ----------
+    // ---------- Боевое устранение (с серверной валидацией) ----------
     if (message.type === "reportElimination") {
       const room = getRoom(ws);
       if (!room || room.phase !== "game") return;
       const playerId = message.playerId;
       const seat = (room.seats || []).find(s => s.id === playerId);
       if (!seat) return;
+
+      loadMirror(room);
+      const hasUnits = state.units.some(u => u.owner === playerId);
+      let hasTerritory = false;
+      for (const owner of state.owners.values()) {
+        if (owner === playerId) { hasTerritory = true; break; }
+      }
+      saveMirror(room);
+
+      if (hasUnits || hasTerritory) return;
       eliminateSeat(room, ws.roomCode, playerId);
       return;
     }
@@ -1097,6 +1195,13 @@ wss.on("connection", (ws) => {
           console.error("Не удалось переслать действие:", error.message);
         }
       }
+      for (const spec of room.spectators || []) {
+        try {
+          if (spec.ws && spec.ws.readyState === 1) spec.ws.send(text);
+        } catch (error) {
+          console.error("Не удалось переслать действие наблюдателю:", error.message);
+        }
+      }
 
       applyActionWithRelations(room, message.action, ws.playerId);
 
@@ -1115,12 +1220,20 @@ wss.on("connection", (ws) => {
     const code = ws.roomCode;
     const playerId = ws.playerId;
     const guestId = ws.guestId;
+    const spectatorId = ws.spectatorId;
     ws.roomCode = null;
     ws.playerId = null;
     ws.guestId = null;
+    ws.spectatorId = null;
     if (!code) return;
     const room = rooms.get(code);
     if (!room) return;
+
+    if (spectatorId !== null && playerId === null) {
+      room.spectators = (room.spectators || []).filter(s => s.id !== spectatorId);
+      sendRoomUpdate(room);
+      return;
+    }
 
     if (guestId !== null && playerId === null) {
       room.guests = (room.guests || []).filter(g => g.guestId !== guestId);
@@ -1133,6 +1246,7 @@ wss.on("connection", (ws) => {
       const leftCode = playerId === 1 ? "hostLeft" : "playerLeft";
       for (const player of remaining) sendTo(player.ws, { type: "roomClosed", code: leftCode });
       for (const guest of room.guests || []) sendTo(guest.ws, { type: "roomClosed", code: leftCode });
+      for (const spec of room.spectators || []) sendTo(spec.ws, { type: "roomClosed", code: leftCode });
       rooms.delete(code);
       console.log(`Комната ${code} закрыта из-за отключения`);
       return;

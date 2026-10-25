@@ -185,14 +185,12 @@ export function canAttackUnit(attacker, target) {
   }
 
   const range = UNIT_TYPES[attacker.type].range;
-
   return getDistance(attacker, target) <= range;
 }
 
 export function calculateDamage(attacker, defender) {
   const attackPower =
     UNIT_TYPES[attacker.type].attack * (Math.max(0, attacker.hp) / 100);
-
   const terrain = getTerrainAt(defender.x, defender.y);
   const terrainDefense = TERRAIN_DEFENSE[terrain] || 0;
   const defense = UNIT_TYPES[defender.type].defense + terrainDefense;
@@ -203,14 +201,18 @@ export function calculateDamage(attacker, defender) {
 
   const ratio = attackPower / defense;
   const damage = Math.round(100 * ratio * ratio);
-
   return Math.min(100, damage);
 }
 
 export function performAttack(attacker, defender) {
   const damageToDefender = calculateDamage(attacker, defender);
-
   defender.hp = Math.max(0, defender.hp - damageToDefender);
+
+  // Юнит, потерявший HP, помечен как «под обстрелом»:
+  // в свой ход его регенерация на зданиях будет урезана (осада)
+  if (damageToDefender > 0) {
+    defender.lastHit = true;
+  }
 
   const defenderDestroyed = defender.hp <= 0;
 
@@ -224,6 +226,11 @@ export function performAttack(attacker, defender) {
   if (canCounter) {
     damageToAttacker = calculateDamage(defender, attacker);
     attacker.hp = Math.max(0, attacker.hp - damageToAttacker);
+
+    if (damageToAttacker > 0) {
+      attacker.lastHit = true;
+    }
+
     attackerDestroyed = attacker.hp <= 0;
   }
 
@@ -298,7 +305,6 @@ export function applyAttack(attackerId, targetId) {
   }
 
   const result = performAttack(attacker, defender);
-
   checkEliminationAndVictory();
 
   return {
@@ -350,7 +356,6 @@ export function applyRecruit(type, x, y) {
     : 1;
 
   const newUnit = createUnit(newId, type, player, x, y, false);
-
   state.units.push(newUnit);
 
   return { success: true };
@@ -396,7 +401,6 @@ function getNextPlayer() {
 
   for (let step = 0; step < ids.length; step++) {
     const candidate = ids[(start + step) % ids.length];
-
     if (candidate !== state.currentPlayer && isPlayerAlive(candidate)) {
       return candidate;
     }
@@ -406,7 +410,6 @@ function getNextPlayer() {
   // ход всё равно передаём по реестру
   for (let step = 0; step < ids.length; step++) {
     const candidate = ids[(start + step) % ids.length];
-
     if (candidate !== state.currentPlayer) {
       return candidate;
     }
@@ -534,13 +537,10 @@ export function checkEliminationAndVictory() {
 export function getTileFromClick(event) {
   const canvas = state.canvas;
   const rect = canvas.getBoundingClientRect();
-
   const scaleX = canvas.width / rect.width;
   const scaleY = canvas.height / rect.height;
-
   const canvasX = (event.clientX - rect.left) * scaleX;
   const canvasY = (event.clientY - rect.top) * scaleY;
-
   const size = state.map.length;
 
   const x = Math.floor(canvasX / state.tileSize);
