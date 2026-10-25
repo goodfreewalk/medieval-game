@@ -21,6 +21,7 @@ import {
 } from "./units.js";
 import { TERRAIN, TERRAIN_DEFENSE, TERRAIN_COST } from "./terrain.js";
 import { drawGame } from "./render.js";
+import { computeChecksum } from "./checksum.js";
 import { showScreen } from "./screens.js";
 import {
   initLobby,
@@ -388,8 +389,8 @@ function updateRecruitPanel() {
     archer: "🏹",
     swordsman: "⚔️",
     lightCavalry: "🏇",
-    heavyCavalry: "🏇 ⚔️",
-    horseArcher: "🏇 "
+    heavyCavalry: "🏇⚔️",
+    horseArcher: "🏇 🏹"
   };
 
   const types = terrain === TERRAIN.VILLAGE
@@ -1278,6 +1279,16 @@ onNetworkMessage((message) => {
       setStickyStatus(`${t("hostEliminated")} — ${t("noSaveResume")}`);
     } else if (state.gameOver) {
       showGameOver();
+    }
+  } else if (message.type === "turnChecksum") {
+    // Сверка с серверным зеркалом после каждой смены хода:
+    // при расхождении молча тянем fullState из зеркала (самолечение)
+    if (state.map && !state.gameOver) {
+      const local = computeChecksum(state);
+
+      if (local !== message.checksum) {
+        sendMessage({ type: "resyncRequest", local });
+      }
     }
   } else if (message.type === "requestState") {
     if (state.map) {

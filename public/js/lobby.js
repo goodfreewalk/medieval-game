@@ -1,6 +1,7 @@
 import { onNetworkMessage, sendMessage } from "./network.js";
 import { t } from "./i18n.js";
 import { MAPS, getMapById } from "./maps.js";
+import { BUILD } from "./build.js";
 
 // ---------- Локальное состояние лобби ----------
 
@@ -83,7 +84,8 @@ function renderResumeCards() {
         type: "resumeGame",
         roomCode: card.code,
         token: card.token,
-        name: (el("nickname").value || "").trim() || t("defaultName")
+        name: (el("nickname").value || "").trim() || t("defaultName"),
+        build: BUILD
       });
     });
 
@@ -479,7 +481,7 @@ export function initLobby(callbacks) {
 
   el("createRoomBtn").addEventListener("click", () => {
     const name = (el("nickname").value || "").trim() || t("defaultName");
-    sendMessage({ type: "createRoom", name });
+    sendMessage({ type: "createRoom", name, build: BUILD });
   });
 
   el("joinRoomBtn").addEventListener("click", () => {
@@ -489,7 +491,7 @@ export function initLobby(callbacks) {
       el("menuStatus").textContent = t("enterCode");
       return;
     }
-    sendMessage({ type: "joinRoom", roomCode: code, name });
+    sendMessage({ type: "joinRoom", roomCode: code, name, build: BUILD });
   });
 
   el("readyBtn").addEventListener("click", () => {

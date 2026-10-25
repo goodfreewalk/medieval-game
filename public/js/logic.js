@@ -208,7 +208,7 @@ export function performAttack(attacker, defender) {
   const damageToDefender = calculateDamage(attacker, defender);
   defender.hp = Math.max(0, defender.hp - damageToDefender);
 
-  // Юнит, потерявший HP, помечен как «под обстрелом»:
+  // Юнит, реально потерявший HP, помечен как «под обстрелом»:
   // в свой ход его регенерация на зданиях будет урезана (осада)
   if (damageToDefender > 0) {
     defender.lastHit = true;
@@ -532,23 +532,4 @@ export function checkEliminationAndVictory() {
     state.gameOver = true;
     state.winner = alivePlayers[0];
   }
-}
-
-export function getTileFromClick(event) {
-  const canvas = state.canvas;
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  const canvasX = (event.clientX - rect.left) * scaleX;
-  const canvasY = (event.clientY - rect.top) * scaleY;
-  const size = state.map.length;
-
-  const x = Math.floor(canvasX / state.tileSize);
-  const y = Math.floor(canvasY / state.tileSize);
-
-  if (x < 0 || x >= size || y < 0 || y >= size) {
-    return null;
-  }
-
-  return { x, y };
 }

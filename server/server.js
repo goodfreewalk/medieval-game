@@ -8,6 +8,8 @@ import { WebSocketServer } from "ws";
 import { state, initGame } from "../public/js/state.js";
 import { TERRAIN } from "../public/js/terrain.js";
 import { getMapById } from "../public/js/maps.js";
+import { BUILD } from "../public/js/build.js";
+import { computeChecksum } from "../public/js/checksum.js";
 import {
   applyMove,
   applyAttack,
@@ -71,7 +73,7 @@ app.use(
 );
 
 const httpServer = app.listen(PORT, () => {
-  console.log(`Сервер запущен на порту ${PORT}`);
+  console.log(`Сервер запущен на порту ${PORT} (build ${BUILD})`);
 });
 
 const wss = new WebSocketServer({ server: httpServer, maxPayload: 64 * 1024 });
@@ -142,6 +144,17 @@ function saveMirror(room) {
     gameOver: state.gameOver,
     winner: state.winner
   };
+}
+
+// ---------- Контрольные суммы (защита от рассинхрона) ----------
+
+// После каждой смены хода рассылаем сумму серверного зеркала:
+// клиент сверяет со своей и при расхождении молча тянет fullState из зеркала
+function sendTurnChecksum(room) {
+  if (!room.mirror) return;
+  loadMirror(room);
+  const checksum = computeChecksum(state);
+  broadcastToRoom(room, { type: "turnChecksum", checksum });
 }
 
 // ---------- Отношения ----------
@@ -375,6 +388,7 @@ function armTurnDriver(room) {
       broadcastToRoom(room, { type: "gameAction", action });
       room.turn = action.next;
       sendRelations(room);
+      sendTurnChecksum(room);
       armTurnDriver(room);
     }, AUTO_TURN_DELAY_MS);
     return;
@@ -427,6 +441,7 @@ function botStep(room) {
     broadcastToRoom(room, { type: "gameAction", action: endAction });
     room.turn = endAction.next;
     sendRelations(room);
+    sendTurnChecksum(room);
     armTurnDriver(room);
   } catch (error) {
     console.error(`[bot] место ${me} упало в планере:`, (error && error.stack) || error);
@@ -436,6 +451,7 @@ function botStep(room) {
       endAction.next = room.mirror ? room.mirror.currentPlayer : nextSeat(room, me);
       broadcastToRoom(room, { type: "gameAction", action: endAction });
       room.turn = endAction.next;
+      sendTurnChecksum(room);
       armTurnDriver(room);
     } catch (fatal) {
       console.error(`[bot] место ${me}: не удалось завершить ход:`, (fatal && fatal.stack) || fatal);
@@ -499,6 +515,7 @@ function eliminateSeat(room, code, playerId) {
 
   broadcastToRoom(room, { type: "playerEliminated", playerId, nextTurn: room.turn });
   sendRelations(room);
+  sendTurnChecksum(room);
   armTurnDriver(room);
 
   if (room.players.length === 0 && (room.guests || []).length === 0 && (room.spectators || []).length === 0) {
@@ -536,6 +553,17 @@ wss.on("connection", (ws) => {
   ws.on("message", (data) => {
     let message;
     try { message = JSON.parse(data.toString()); } catch { return; }
+
+    // ---------- Версионный гейт на точках входа ----------
+    // Старая вкладка держит старый штамп build.js в памяти и не сможет
+    // создать/войти/возобновить комнату: получит понятную ошибку
+    if (
+      (message.type === "createRoom" || message.type === "joinRoom" || message.type === "resumeGame") &&
+      message.build !== BUILD
+    ) {
+      sendTo(ws, { type: "error", code: "clientOutdated" });
+      return;
+    }
 
     // ---------- Создание комнаты ----------
     if (message.type === "createRoom") {
@@ -935,6 +963,7 @@ wss.on("connection", (ws) => {
         turn: 1,
         relations: room.relations
       });
+      sendTurnChecksum(room);
       armTurnDriver(room);
       console.log(`Игра началась в комнате ${ws.roomCode}: ` + seats.map(s => `${s.id}:${s.kind}`).join(", "));
       return;
@@ -1021,6 +1050,7 @@ wss.on("connection", (ws) => {
         relations: room.relations
       });
       broadcastToRoom(room, { type: "fullState", state: room.mirror });
+      sendTurnChecksum(room);
 
       for (const player of players) player.hasState = true;
       armTurnDriver(room);
@@ -1111,6 +1141,14 @@ wss.on("connection", (ws) => {
     if (message.type === "rejoinRoom") {
       const room = rooms.get(message.roomCode);
       if (!room || room.phase !== "game") { sendTo(ws, { type: "gameGone" }); return; }
+
+      // Новый клиент с чужим штампом — отклоняем; старый клиент без штампа
+      // пропускаем: его выровняет контрольная сумма на ближайшем ходе
+      if (message.build && message.build !== BUILD) {
+        sendTo(ws, { type: "error", code: "clientOutdated" });
+        return;
+      }
+
       const slot = room.players.find(p => p.id === message.playerId);
       if (!slot || !slot.disconnected) { sendTo(ws, { type: "gameGone" }); return; }
 
@@ -1145,6 +1183,20 @@ wss.on("connection", (ws) => {
       sendTo(target && target.ws, { type: "fullState", state: message.state });
       if (target) target.hasState = true;
       room.pendingStateFor = undefined;
+      return;
+    }
+
+    // ---------- Запрос ресинка из зеркала (несовпадение контрольной суммы) ----------
+    if (message.type === "resyncRequest") {
+      const room = getRoom(ws);
+      if (!room || room.phase !== "game" || !room.mirror) return;
+
+      loadMirror(room);
+      const mirrorSum = computeChecksum(state);
+      console.log(
+        `[sync] место ${ws.playerId} запросило ресинк: local=${message.local || "?"}, mirror=${mirrorSum}`
+      );
+      sendTo(ws, { type: "fullState", state: room.mirror });
       return;
     }
 
@@ -1208,10 +1260,14 @@ wss.on("connection", (ws) => {
       if (message.action && message.action.kind === "endTurn") {
         room.turn = room.mirror.currentPlayer;
         sendRelations(room);
+        sendTurnChecksum(room);
         armTurnDriver(room);
       }
       return;
     }
+
+    // ---------- Контрольная сумма хода: клиент сверяет локальное состояние ----------
+    // (сообщение приходит только от сервера; обработка на клиенте в main.js)
   });
 
   // ---------- Отключение ----------
