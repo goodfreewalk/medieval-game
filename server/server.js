@@ -38,6 +38,9 @@ const BOT_MAX_STEPS = 40;
 const RECONNECT_GRACE_MS = 60000;
 const STATE_FALLBACK_MS = 3000;
 
+// Допустимые типы игровых действий от клиента
+const GAME_ACTION_KINDS = new Set(["move", "attack", "recruit", "endTurn"]);
+
 const REL_MIN = -100;
 const REL_MAX = 100;
 const REL_DECAY = 0.97;
@@ -551,6 +554,8 @@ wss.on("connection", (ws) => {
   ws.on("error", (error) => console.error("Ошибка соединения игрока:", error.message));
 
   ws.on("message", (data) => {
+    // Любая ошибка при обработке сообщения не должна ронять процесс
+    try {
     let message;
     try { message = JSON.parse(data.toString()); } catch { return; }
 
@@ -1236,6 +1241,12 @@ wss.on("connection", (ws) => {
       const room = getRoom(ws);
       if (!room || room.phase !== "game") return;
       if (ws.playerId !== room.turn) return;
+
+      // Без валидного действия сообщение игнорируем: иначе applyActionWithRelations
+      // упадёт с TypeError и уронит весь процесс вместе со всеми комнатами
+      const action = message.action;
+      if (!action || typeof action !== "object" || !GAME_ACTION_KINDS.has(action.kind)) return;
+
       ws.hasState = true;
 
       const text = JSON.stringify(message);
@@ -1268,6 +1279,9 @@ wss.on("connection", (ws) => {
 
     // ---------- Контрольная сумма хода: клиент сверяет локальное состояние ----------
     // (сообщение приходит только от сервера; обработка на клиенте в main.js)
+    } catch (error) {
+      console.error("Ошибка обработки сообщения игрока:", (error && error.stack) || error);
+    }
   });
 
   // ---------- Отключение ----------
@@ -1324,4 +1338,9 @@ wss.on("connection", (ws) => {
       eliminateSeat(current, code, playerId);
     }, RECONNECT_GRACE_MS);
   });
+});
+
+// Последняя страховка: необработанное исключение логируем, но не роняем процесс
+process.on("uncaughtException", (error) => {
+  console.error("Необработанное исключение:", (error && error.stack) || error);
 });
