@@ -1247,7 +1247,8 @@ wss.on("connection", (ws) => {
       const action = message.action;
       if (!action || typeof action !== "object" || !GAME_ACTION_KINDS.has(action.kind)) return;
 
-      ws.hasState = true;
+      const slot = room.players.find(p => p.ws === ws);
+      if (slot) slot.hasState = true;
 
       const text = JSON.stringify(message);
       for (const player of room.players) {
