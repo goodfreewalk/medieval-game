@@ -33,6 +33,7 @@ import {
 import {
   onNetworkMessage,
   sendMessage,
+  isNetworkConnected,
   saveGameSession,
   clearGameSession
 } from "./network.js";
@@ -102,9 +103,6 @@ const pendingEliminations = new Set();
 // Данные резюма, ждущие fullState
 let pendingResume = null;
 
-// Защита от повторной отправки gameOver
-let gameOverSent = false;
-
 // Защита от случайного выхода: второе нажатие в течение 3 секунд
 let leaveArmed = false;
 let leaveArmedTimer = null;
@@ -115,8 +113,12 @@ function isMyTurn() {
   return state.currentPlayer === getMyPlayerId();
 }
 
+function canPlayTurn() {
+  return isMyTurn() && isNetworkConnected() && !state.gameOver;
+}
+
 function sendAction(action) {
-  sendMessage({ type: "gameAction", action });
+  return sendMessage({ type: "gameAction", action });
 }
 
 // --- Панель заявок на место ---
@@ -195,7 +197,7 @@ function updateTurnInfo() {
     turnInfo.textContent = `${t("turn")}: ${state.currentPlayer}`;
   }
 
-  endTurnButton.disabled = !isMyTurn() || state.gameOver;
+  endTurnButton.disabled = !canPlayTurn();
 }
 
 function updateTimerDisplay() {
@@ -228,25 +230,8 @@ function startTurnTimer() {
 
     if (timeLeft <= 0) {
       stopTurnTimer();
-      autoEndTurn();
     }
   }, 1000);
-}
-
-function autoEndTurn() {
-  if (state.gameOver) {
-    return;
-  }
-
-  if (!isMyTurn()) {
-    return;
-  }
-
-  const action = { kind: "endTurn" };
-
-  if (runAction(action)) {
-    sendAction(action);
-  }
 }
 
 function updateResources() {
@@ -357,7 +342,7 @@ function updateRecruitPanel() {
     (state.map[tile.y][tile.x] === TERRAIN.CASTLE ||
       state.map[tile.y][tile.x] === TERRAIN.VILLAGE) &&
     getTileOwner(tile.x, tile.y) === getMyPlayerId() &&
-    isMyTurn() &&
+    canPlayTurn() &&
     !getUnitAtTile(state.units, tile.x, tile.y);
 
   recruitPanel.style.display = show ? "" : "none";
@@ -416,6 +401,7 @@ function updateRecruitPanel() {
     }
 
     button.addEventListener("click", () => {
+      if (!canPlayTurn()) return;
       const action = { kind: "recruit", type, x: tile.x, y: tile.y };
 
       if (runAction(action)) {
@@ -462,9 +448,8 @@ function detectEliminations() {
       }
     }
 
-    if (!hasTerritory) {
+    if (!hasTerritory && sendMessage({ type: "reportElimination", playerId: id })) {
       pendingEliminations.add(id);
-      sendMessage({ type: "reportElimination", playerId: id });
     }
   }
 }
@@ -518,11 +503,6 @@ function showGameOver(reason) {
 
   if (reason !== t("connectionLost") && getRoomCode()) {
     removeResumeCard(getRoomCode());
-  }
-
-  if (state.map && !gameOverSent) {
-    gameOverSent = true;
-    sendMessage({ type: "gameOver", winner: state.winner });
   }
 
   gameOverOverlay.classList.remove("hidden");
@@ -1132,7 +1112,7 @@ canvas.addEventListener("click", (event) => {
     return;
   }
 
-  if (isMyTurn() && canAttackUnit(state.selectedUnit, clickedUnit)) {
+  if (canPlayTurn() && canAttackUnit(state.selectedUnit, clickedUnit)) {
     const action = {
       kind: "attack",
       attackerId: state.selectedUnit.id,
@@ -1156,7 +1136,7 @@ canvas.addEventListener("click", (event) => {
     return;
   }
 
-  if (state.selectedUnit && isMyTurn()) {
+  if (state.selectedUnit && canPlayTurn()) {
     const action = {
       kind: "move",
       unitId: state.selectedUnit.id,
@@ -1181,7 +1161,7 @@ canvas.addEventListener("click", (event) => {
 // --- Кнопки панели хода ---
 
 endTurnButton.addEventListener("click", () => {
-  if (!isMyTurn() || state.gameOver) {
+  if (!canPlayTurn()) {
     return;
   }
 
@@ -1233,19 +1213,22 @@ window.addEventListener("orientationchange", () => {
 
 onNetworkMessage((message) => {
   if (message.type === "gameAction") {
-    runAction(message.action);
-  } else if (message.type === "autoEndTurn") {
-    if (!state.gameOver && state.currentPlayer === message.playerId) {
-      runAction({ kind: "endTurn", auto: true });
-    }
+    const action = message.action;
+    if (
+      action.auto && action.playerId === getMyPlayerId() &&
+      state.currentPlayer === action.next
+    ) return;
+    runAction(action);
   } else if (message.type === "opponentLeft") {
     handleOpponentLeft();
   } else if (message.type === "connectionLost") {
     handleConnectionLost();
   } else if (message.type === "reconnecting") {
     setNetStatus(t("reconnecting"));
+    refreshGame();
   } else if (message.type === "rejoinOk") {
     setNetStatus(t("syncingState"));
+    refreshGame();
   } else if (message.type === "gameGone") {
     clearGameSession();
 
@@ -1275,10 +1258,10 @@ onNetworkMessage((message) => {
 
     if (message.playerId === getMyPlayerId()) {
       showGameOver(t("eliminatedYou"));
-    } else if (message.playerId === 1) {
-      setStickyStatus(`${t("hostEliminated")} — ${t("noSaveResume")}`);
     } else if (state.gameOver) {
       showGameOver();
+    } else if (message.playerId === 1) {
+      setStickyStatus(`${t("hostEliminated")} — ${t("noSaveResume")}`);
     }
   } else if (message.type === "turnChecksum") {
     // Сверка с серверным зеркалом после каждой смены хода:
@@ -1289,10 +1272,6 @@ onNetworkMessage((message) => {
       if (local !== message.checksum) {
         sendMessage({ type: "resyncRequest", local });
       }
-    }
-  } else if (message.type === "requestState") {
-    if (state.map) {
-      sendMessage({ type: "fullState", state: serializeState() });
     }
   } else if (message.type === "saveOk") {
     upsertResumeCard(getRoomCode(), getMyPlayerId(), message.token);
@@ -1359,7 +1338,6 @@ onNetworkMessage((message) => {
 
 initLobby({
   onGameStart: (message) => {
-    gameOverSent = false;
     pendingEliminations.clear();
     clearGuestRequests();
     setStickyStatus("");

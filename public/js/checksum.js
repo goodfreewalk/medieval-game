@@ -20,7 +20,8 @@ export function computeChecksum(st) {
   const units = (st.units || [])
     .slice()
     .sort((a, b) => a.id - b.id)
-    .map(u => `${u.id}:${u.owner}:${u.type}:${u.x},${u.y}:${u.hp}`)
+    .map(u => `${u.id}:${u.owner}:${u.type}:${u.x},${u.y}:${u.hp}:` +
+      `${u.movementLeft}:${u.hasAttacked ? 1 : 0}:${u.lastHit ? 1 : 0}`)
     .join("|");
 
   let ownersEntries;

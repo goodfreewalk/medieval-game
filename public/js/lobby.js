@@ -80,13 +80,24 @@ function renderResumeCards() {
     btn.className = "resumeCardButton";
     btn.textContent = `${t("resumeCard")}: ${card.code}`;
     btn.addEventListener("click", () => {
-      sendMessage({
-        type: "resumeGame",
-        roomCode: card.code,
-        token: card.token,
-        name: (el("nickname").value || "").trim() || t("defaultName"),
-        build: BUILD
-      });
+      const name = (el("nickname").value || "").trim() || t("defaultName");
+      if (card.token) {
+        sendMessage({
+          type: "resumeGame",
+          roomCode: card.code,
+          token: card.token,
+          name,
+          build: BUILD
+        });
+      } else {
+        sendMessage({
+          type: "joinRoom",
+          roomCode: card.code,
+          preferredSeat: card.playerId,
+          name,
+          build: BUILD
+        });
+      }
     });
 
     const del = document.createElement("button");
@@ -323,7 +334,7 @@ function renderSeatDraft(update) {
         : d.kind === "passive"
           ? t("seatPassive")
           : d.kind === "eliminate"
-            ? t("seatEliminated")
+            ? t("seatEliminate")
             : t("seatHuman");
       const span = document.createElement("span");
       span.textContent = kindText;
@@ -338,7 +349,7 @@ function renderSeatDraft(update) {
       { value: "passive", text: t("seatPassive") },
       { value: "bot:balanced", text: t("botBalanced") },
       { value: "bot:aggressive", text: t("botAggressive") },
-      { value: "eliminate", text: t("seatEliminated") }
+      { value: "eliminate", text: t("seatEliminate") }
     ];
     for (const guest of guests) {
       options.push({ value: `human:${guest.guestId}`, text: guest.name });
@@ -423,7 +434,7 @@ function handleMessage(message) {
   }
 
   if (message.type === "resumeStartedWithoutYou") {
-    backToMenu(t("resumeWithoutYou"));
+    backToMenu(t("startedWithoutYou"));
     return;
   }
 
