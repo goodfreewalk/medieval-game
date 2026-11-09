@@ -12,14 +12,13 @@ import {
   getLanguage,
   setLanguage,
   t,
-  terrainName,
   unitName
 } from "./i18n.js";
 import {
   getUnitAtTile,
   UNIT_TYPES
 } from "./units.js";
-import { TERRAIN, TERRAIN_DEFENSE, TERRAIN_COST } from "./terrain.js";
+import { TERRAIN } from "./terrain.js";
 import { drawGame } from "./render.js";
 import { computeChecksum } from "./checksum.js";
 import { showScreen } from "./screens.js";
@@ -28,7 +27,8 @@ import {
   getMyPlayerId,
   getRoomCode,
   upsertResumeCard,
-  removeResumeCard
+  removeResumeCard,
+  restorePlayerIdentity
 } from "./lobby.js";
 import {
   onNetworkMessage,
@@ -51,7 +51,6 @@ import {
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
-const info = document.getElementById("info");
 const turnInfo = document.getElementById("turnInfo");
 const timerElement = document.getElementById("timer");
 const endTurnButton = document.getElementById("endTurn");
@@ -255,68 +254,6 @@ function updateResources() {
     `</div>`;
 }
 
-function updateInfo() {
-  if (state.selectedUnit) {
-    const unit = state.selectedUnit;
-    const type = UNIT_TYPES[unit.type];
-
-    let text =
-      `${unitName(unit.type)} | ` +
-      `${t("player")}: ${unit.owner} | ` +
-      `❤️ ${unit.hp}`;
-
-    text += ` | ⚔️ ${type.attack} | 🛡️ ${type.defense} | 👣 ${type.movement}`;
-
-    if (unit.owner === state.currentPlayer) {
-      if (unit.hasAttacked) {
-        text += ` | ${t("acted")}`;
-      } else if (unit.movementLeft < type.movement) {
-        text += ` | ${t("moved")}`;
-      } else {
-        text += ` | ${t("ready")}`;
-      }
-    }
-
-    info.textContent = text;
-    return;
-  }
-
-  if (state.selectedTile) {
-    const terrain = state.map[state.selectedTile.y][state.selectedTile.x];
-    const terrainDef = TERRAIN_DEFENSE[terrain] || 0;
-    const terrainCost = TERRAIN_COST[terrain];
-    const isPassable = terrainCost !== Infinity;
-
-    let text = terrainName(terrain);
-
-    if (!isPassable) {
-      text += ` | 🚫`;
-    } else {
-      text += ` | 👣 ${terrainCost}`;
-    }
-
-    if (terrainDef > 0) {
-      text += ` | 🛡️ +${terrainDef}`;
-    }
-
-    if (terrain === TERRAIN.VILLAGE || terrain === TERRAIN.CASTLE) {
-      const owner = getTileOwner(state.selectedTile.x, state.selectedTile.y);
-      const isCastle = terrain === TERRAIN.CASTLE;
-
-      text += ` | 💰 +${isCastle ? 6 : 2} | 📦 +${isCastle ? 3 : 1}`;
-
-      if (owner !== 0) {
-        text += ` | 🚩 ${owner}`;
-      }
-    }
-
-    info.textContent = text;
-    return;
-  }
-
-  info.textContent = t("infoDefault");
-}
-
 // Закрыть окно найма и снять выделение
 function closeRecruitPanel() {
   state.selectedTile = null;
@@ -325,7 +262,6 @@ function closeRecruitPanel() {
   state.attackableTiles = new Map();
 
   updateRecruitPanel();
-  updateInfo();
   drawGame();
 }
 
@@ -459,7 +395,6 @@ function refreshGame() {
   resourcesElement.style.display = getMyPlayerId() ? "" : "none";
   updateResources();
   updateRecruitPanel();
-  updateInfo();
 
   saveGameBtn.style.display =
     getMyPlayerId() === 1 && state.map && !state.gameOver ? "" : "none";
@@ -847,7 +782,7 @@ function resizeCanvas() {
     return;
   }
 
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
   state.viewW = Math.round(rect.width);
   state.viewH = Math.round(rect.height);
@@ -1107,7 +1042,6 @@ canvas.addEventListener("click", (event) => {
     state.reachableTiles = new Map();
     state.attackableTiles = new Map();
 
-    updateInfo();
     updateRecruitPanel();
     drawGame();
     return;
@@ -1131,7 +1065,6 @@ canvas.addEventListener("click", (event) => {
     state.selectedUnit = clickedUnit;
     state.selectedTile = tile;
     updateSelectionHighlights();
-    updateInfo();
     updateRecruitPanel();
     drawGame();
     return;
@@ -1154,7 +1087,6 @@ canvas.addEventListener("click", (event) => {
   state.selectedUnit = null;
   state.selectedTile = tile;
   updateSelectionHighlights();
-  updateInfo();
   updateRecruitPanel();
   drawGame();
 });
@@ -1307,6 +1239,9 @@ onNetworkMessage((message) => {
       showGameOver();
     }
   } else if (message.type === "fullState") {
+    if (message.roomCode && Number.isInteger(message.playerId)) {
+      restorePlayerIdentity(message.roomCode, message.playerId);
+    }
     applyFullState(message.state);
 
     if (pendingResume) {
