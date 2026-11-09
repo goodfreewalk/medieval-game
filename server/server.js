@@ -358,6 +358,16 @@ function sendTo(ws, message) {
   }
 }
 
+function releaseGuestSeat(room, guestId) {
+  if (!room.resumeLobby || !room.seatDraft) return;
+  for (const draft of Object.values(room.seatDraft)) {
+    if (draft.kind === "human" && draft.guestId === guestId) {
+      draft.kind = "passive";
+      draft.guestId = null;
+    }
+  }
+}
+
 function sendRoomUpdate(room) {
   broadcastToRoom(room, {
     type: "roomUpdate",
@@ -509,7 +519,7 @@ function restorePlayerState(room, slot) {
     slot.disconnected = true;
     slot.ws = null;
     slot.hasState = false;
-    sendTo(wsTarget, { type: "gameGone" });
+    sendTo(wsTarget, { type: "gameGone", roomCode: wsTarget.roomCode });
     return;
   }
 
@@ -682,7 +692,16 @@ wss.on("connection", (ws) => {
 
       try {
         fs.writeFileSync(savePath(ws.roomCode), JSON.stringify(save));
-        sendTo(ws, { type: "saveOk", token });
+        const info = {
+          savedAt: save.savedAt,
+          mapId: save.mapId,
+          turn: save.turn,
+          seats: save.players.length
+        };
+        sendTo(ws, { type: "saveOk", token, ...info });
+        for (const player of room.players) {
+          if (player.ws !== ws) sendTo(player.ws, { type: "saveAvailable", ...info });
+        }
         console.log(`Игра сохранена: комната ${ws.roomCode}`);
       } catch (error) {
         console.error("Не удалось сохранить игру:", error.message);
@@ -1138,6 +1157,7 @@ wss.on("connection", (ws) => {
       }
 
       if (ws.guestId !== null && playerId === null) {
+        releaseGuestSeat(room, ws.guestId);
         room.guests = (room.guests || []).filter(g => g.ws !== ws);
         ws.guestId = null;
         sendRoomUpdate(room);
@@ -1166,7 +1186,7 @@ wss.on("connection", (ws) => {
     // ---------- Rejoin ----------
     if (message.type === "rejoinRoom") {
       const room = rooms.get(message.roomCode);
-      if (!room || room.phase !== "game") { sendTo(ws, { type: "gameGone" }); return; }
+      if (!room || room.phase !== "game") { sendTo(ws, { type: "gameGone", roomCode: message.roomCode }); return; }
 
       if (message.build !== BUILD) {
         sendTo(ws, { type: "error", code: "clientOutdated" });
@@ -1174,7 +1194,7 @@ wss.on("connection", (ws) => {
       }
 
       const slot = room.players.find(p => p.id === message.playerId);
-      if (!slot || !slot.disconnected) { sendTo(ws, { type: "gameGone" }); return; }
+      if (!slot || !slot.disconnected) { sendTo(ws, { type: "gameGone", roomCode: message.roomCode }); return; }
 
       slot.ws = ws;
       slot.disconnected = false;
@@ -1304,6 +1324,7 @@ wss.on("connection", (ws) => {
     }
 
     if (guestId !== null && playerId === null) {
+      releaseGuestSeat(room, guestId);
       room.guests = (room.guests || []).filter(g => g.guestId !== guestId);
       sendRoomUpdate(room);
       return;
