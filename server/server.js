@@ -36,7 +36,7 @@ const BOT_FIRST_STEP_MS = 900;
 const BOT_STEP_DELAY_MS = 500;
 const BOT_MAX_STEPS = 40;
 const RECONNECT_GRACE_MS = 60000;
-const STATE_FALLBACK_MS = 3000;
+const TURN_TIME_MS = 60000;
 
 // Допустимые типы игровых действий от клиента
 const GAME_ACTION_KINDS = new Set(["move", "attack", "recruit", "endTurn"]);
@@ -160,6 +160,14 @@ function sendTurnChecksum(room) {
   broadcastToRoom(room, { type: "turnChecksum", checksum });
 }
 
+function broadcastGameOver(room) {
+  if (!room.mirror || !room.mirror.gameOver || room.gameOverNotified) return;
+  room.gameOverNotified = true;
+  clearTimeout(room.autoTimer);
+  room.autoTimer = null;
+  broadcastToRoom(room, { type: "gameOver", winner: room.mirror.winner });
+}
+
 // ---------- Отношения ----------
 
 function initRelations(room) {
@@ -280,10 +288,16 @@ function applyActionWithRelations(room, action, meId) {
     before = snapshotBuildingOwners();
   }
 
-  if (action.kind === "move") applyMove(action.unitId, action.x, action.y);
-  else if (action.kind === "attack") applyAttack(action.attackerId, action.targetId);
-  else if (action.kind === "recruit") applyRecruit(action.type, action.x, action.y);
-  else if (action.kind === "endTurn") applyEndTurn();
+  let result;
+  if (action.kind === "move") result = applyMove(action.unitId, action.x, action.y);
+  else if (action.kind === "attack") result = applyAttack(action.attackerId, action.targetId);
+  else if (action.kind === "recruit") result = applyRecruit(action.type, action.x, action.y);
+  else if (action.kind === "endTurn") {
+    applyEndTurn();
+    result = { success: true };
+  } else return { success: false };
+
+  if (!result.success) return result;
 
   if (before) {
     for (const [key, oldOwner] of before) {
@@ -303,6 +317,7 @@ function applyActionWithRelations(room, action, meId) {
   }
 
   saveMirror(room);
+  return result;
 }
 
 function sendRelations(room) {
@@ -343,6 +358,16 @@ function sendTo(ws, message) {
   }
 }
 
+function releaseGuestSeat(room, guestId) {
+  if (!room.resumeLobby || !room.seatDraft) return;
+  for (const draft of Object.values(room.seatDraft)) {
+    if (draft.kind === "human" && draft.guestId === guestId) {
+      draft.kind = "passive";
+      draft.guestId = null;
+    }
+  }
+}
+
 function sendRoomUpdate(room) {
   broadcastToRoom(room, {
     type: "roomUpdate",
@@ -372,28 +397,37 @@ function seatKind(room, id) {
   return seat ? seat.kind : null;
 }
 
-// ---------- Драйвер автоматических мест ----------
+// ---------- Драйвер хода и автоматических мест ----------
+
+function completeAutomaticTurn(room, expectedTurn) {
+  if (
+    room.phase !== "game" || !room.mirror || room.mirror.gameOver ||
+    room.turn !== expectedTurn
+  ) return;
+
+  const me = room.turn;
+  const action = { kind: "endTurn", auto: true, playerId: me };
+  applyActionWithRelations(room, action, me);
+  action.next = room.mirror.currentPlayer;
+  room.turn = action.next;
+  broadcastToRoom(room, { type: "gameAction", action });
+  sendRelations(room);
+  sendTurnChecksum(room);
+  broadcastGameOver(room);
+  armTurnDriver(room);
+}
 
 function armTurnDriver(room) {
   clearTimeout(room.autoTimer);
   room.autoTimer = null;
-  if (room.phase !== "game" || !room.mirror) return;
+  if (room.phase !== "game" || !room.mirror || room.mirror.gameOver) return;
 
   const kind = seatKind(room, room.turn);
 
-  if (kind === "passive") {
-    room.autoTimer = setTimeout(() => {
-      if (room.phase !== "game" || seatKind(room, room.turn) !== "passive") return;
-      const me = room.turn;
-      const action = { kind: "endTurn" };
-      applyActionWithRelations(room, action, me);
-      action.next = room.mirror.currentPlayer;
-      broadcastToRoom(room, { type: "gameAction", action });
-      room.turn = action.next;
-      sendRelations(room);
-      sendTurnChecksum(room);
-      armTurnDriver(room);
-    }, AUTO_TURN_DELAY_MS);
+  if (kind === "passive" || kind === "human") {
+    const expectedTurn = room.turn;
+    const delay = kind === "passive" ? AUTO_TURN_DELAY_MS : TURN_TIME_MS;
+    room.autoTimer = setTimeout(() => completeAutomaticTurn(room, expectedTurn), delay);
     return;
   }
 
@@ -413,7 +447,12 @@ function botStep(room) {
   try {
     loadMirror(room);
 
-    if (state.gameOver || state.currentPlayer !== me) {
+    if (state.gameOver) {
+      saveMirror(room);
+      broadcastGameOver(room);
+      return;
+    }
+    if (state.currentPlayer !== me) {
       saveMirror(room);
       return;
     }
@@ -432,10 +471,17 @@ function botStep(room) {
 
     if (action) {
       room.botSteps += 1;
-      applyActionWithRelations(room, action, me);
-      broadcastToRoom(room, { type: "gameAction", action });
-      room.autoTimer = setTimeout(() => botStep(room), BOT_STEP_DELAY_MS);
-      return;
+      const result = applyActionWithRelations(room, action, me);
+      if (result.success) {
+        broadcastToRoom(room, { type: "gameAction", action });
+        if (room.mirror.gameOver) {
+          broadcastGameOver(room);
+          return;
+        }
+        room.autoTimer = setTimeout(() => botStep(room), BOT_STEP_DELAY_MS);
+        return;
+      }
+      console.error(`[bot] место ${me}: действие отклонено`, action);
     }
 
     const endAction = { kind: "endTurn" };
@@ -445,6 +491,7 @@ function botStep(room) {
     room.turn = endAction.next;
     sendRelations(room);
     sendTurnChecksum(room);
+    broadcastGameOver(room);
     armTurnDriver(room);
   } catch (error) {
     console.error(`[bot] место ${me} упало в планере:`, (error && error.stack) || error);
@@ -455,6 +502,7 @@ function botStep(room) {
       broadcastToRoom(room, { type: "gameAction", action: endAction });
       room.turn = endAction.next;
       sendTurnChecksum(room);
+      broadcastGameOver(room);
       armTurnDriver(room);
     } catch (fatal) {
       console.error(`[bot] место ${me}: не удалось завершить ход:`, (fatal && fatal.stack) || fatal);
@@ -462,37 +510,21 @@ function botStep(room) {
   }
 }
 
-// ---------- Резерв синхронизации ----------
+// ---------- Восстановление из авторитетного зеркала ----------
 
-function armStateFallback(room, targetId, code) {
-  setTimeout(() => {
-    if (room.pendingStateFor !== targetId) return;
-    room.pendingStateFor = undefined;
+function restorePlayerState(room, slot) {
+  if (!slot || !slot.ws) return;
+  if (!room.mirror) {
+    const wsTarget = slot.ws;
+    slot.disconnected = true;
+    slot.ws = null;
+    slot.hasState = false;
+    sendTo(wsTarget, { type: "gameGone", roomCode: wsTarget.roomCode });
+    return;
+  }
 
-    const slot = room.players.find(p => p.id === targetId);
-    if (!slot || !slot.ws || slot.ws.readyState !== 1) return;
-
-    let fallback = room.mirror || null;
-    if (!fallback && room.saveData) fallback = room.saveData.state;
-    if (!fallback) {
-      const { save } = readSave(code);
-      if (save) fallback = save.state;
-    }
-
-    if (fallback) {
-      slot.hasState = true;
-      sendTo(slot.ws, { type: "fullState", state: fallback });
-      sendRelations(room);
-      console.log(`Состояние для места ${targetId} восстановлено из резерва`);
-    } else {
-      const wsTarget = slot.ws;
-      slot.disconnected = true;
-      slot.ws = null;
-      slot.hasState = false;
-      sendTo(wsTarget, { type: "gameGone" });
-      console.log(`Состояние для места ${targetId} потеряно: слот освобождён`);
-    }
-  }, STATE_FALLBACK_MS);
+  slot.hasState = true;
+  sendTo(slot.ws, { type: "fullState", state: room.mirror });
 }
 
 // ---------- Устранения ----------
@@ -519,14 +551,18 @@ function eliminateSeat(room, code, playerId) {
   broadcastToRoom(room, { type: "playerEliminated", playerId, nextTurn: room.turn });
   sendRelations(room);
   sendTurnChecksum(room);
-  armTurnDriver(room);
+  broadcastGameOver(room);
 
   if (room.players.length === 0 && (room.guests || []).length === 0 && (room.spectators || []).length === 0) {
+    clearTimeout(room.autoTimer);
+    room.autoTimer = null;
     rooms.delete(code);
     console.log(`Комната ${code} пуста после устранения`);
-  } else {
-    console.log(`Игрок ${playerId} устранён в комнате ${code}, ход: ${room.turn}`);
+    return;
   }
+
+  armTurnDriver(room);
+  console.log(`Игрок ${playerId} устранён в комнате ${code}, ход: ${room.turn}`);
 }
 
 // ---------- Heartbeat ----------
@@ -656,7 +692,16 @@ wss.on("connection", (ws) => {
 
       try {
         fs.writeFileSync(savePath(ws.roomCode), JSON.stringify(save));
-        sendTo(ws, { type: "saveOk", token });
+        const info = {
+          savedAt: save.savedAt,
+          mapId: save.mapId,
+          turn: save.turn,
+          seats: save.players.length
+        };
+        sendTo(ws, { type: "saveOk", token, ...info });
+        for (const player of room.players) {
+          if (player.ws !== ws) sendTo(player.ws, { type: "saveAvailable", ...info });
+        }
         console.log(`Игра сохранена: комната ${ws.roomCode}`);
       } catch (error) {
         console.error("Не удалось сохранить игру:", error.message);
@@ -693,11 +738,7 @@ wss.on("connection", (ws) => {
             for (const player of existing.players) {
               if (player.id !== 1) sendTo(player.ws, { type: "opponentReconnected", playerId: 1 });
             }
-            existing.pendingStateFor = 1;
-            for (const player of existing.players) {
-              if (player.id !== 1) sendTo(player.ws, { type: "requestState" });
-            }
-            armStateFallback(existing, 1, code);
+            restorePlayerState(existing, slot);
             sendRelations(existing);
             return;
           }
@@ -782,11 +823,7 @@ wss.on("connection", (ws) => {
             for (const player of room.players) {
               if (player.id !== wanted) sendTo(player.ws, { type: "opponentReconnected", playerId: wanted });
             }
-            room.pendingStateFor = wanted;
-            for (const player of room.players) {
-              if (player.id !== wanted) sendTo(player.ws, { type: "requestState" });
-            }
-            armStateFallback(room, wanted, code);
+            restorePlayerState(room, slot);
             sendRelations(room);
             return;
           }
@@ -1085,12 +1122,8 @@ wss.on("connection", (ws) => {
       if (room.mirror) { loadMirror(room); state.seatKinds[seat.id] = "human"; saveMirror(room); }
       if (room.relations && !room.relations[seat.id]) room.relations[seat.id] = {};
 
-      clearTimeout(room.autoTimer);
-      room.pendingStateFor = seat.id;
-      for (const player of room.players) {
-        if (player.id !== seat.id) sendTo(player.ws, { type: "requestState" });
-      }
-      armStateFallback(room, seat.id, ws.roomCode);
+      restorePlayerState(room, room.players.find(p => p.ws === guest.ws));
+      if (room.turn === seat.id) armTurnDriver(room);
       sendRelations(room);
       return;
     }
@@ -1123,6 +1156,14 @@ wss.on("connection", (ws) => {
         return;
       }
 
+      if (ws.guestId !== null && playerId === null) {
+        releaseGuestSeat(room, ws.guestId);
+        room.guests = (room.guests || []).filter(g => g.ws !== ws);
+        ws.guestId = null;
+        sendRoomUpdate(room);
+        return;
+      }
+
       room.players = room.players.filter(p => p.ws !== ws);
 
       if (room.phase === "lobby") {
@@ -1145,17 +1186,15 @@ wss.on("connection", (ws) => {
     // ---------- Rejoin ----------
     if (message.type === "rejoinRoom") {
       const room = rooms.get(message.roomCode);
-      if (!room || room.phase !== "game") { sendTo(ws, { type: "gameGone" }); return; }
+      if (!room || room.phase !== "game") { sendTo(ws, { type: "gameGone", roomCode: message.roomCode }); return; }
 
-      // Новый клиент с чужим штампом — отклоняем; старый клиент без штампа
-      // пропускаем: его выровняет контрольная сумма на ближайшем ходе
-      if (message.build && message.build !== BUILD) {
+      if (message.build !== BUILD) {
         sendTo(ws, { type: "error", code: "clientOutdated" });
         return;
       }
 
       const slot = room.players.find(p => p.id === message.playerId);
-      if (!slot || !slot.disconnected) { sendTo(ws, { type: "gameGone" }); return; }
+      if (!slot || !slot.disconnected) { sendTo(ws, { type: "gameGone", roomCode: message.roomCode }); return; }
 
       slot.ws = ws;
       slot.disconnected = false;
@@ -1169,25 +1208,8 @@ wss.on("connection", (ws) => {
       for (const player of room.players) {
         if (player.id !== message.playerId) sendTo(player.ws, { type: "opponentReconnected", playerId: message.playerId });
       }
-      room.pendingStateFor = message.playerId;
-      for (const player of room.players) {
-        if (player.id !== message.playerId) sendTo(player.ws, { type: "requestState" });
-      }
-      armStateFallback(room, message.playerId, message.roomCode);
+      restorePlayerState(room, slot);
       sendRelations(room);
-      return;
-    }
-
-    // ---------- Синхронизация состояния ----------
-    if (message.type === "fullState") {
-      const room = getRoom(ws);
-      if (!room || room.phase !== "game") return;
-      const targetId = room.pendingStateFor;
-      if (targetId === undefined || targetId === ws.playerId) return;
-      const target = room.players.find(p => p.id === targetId);
-      sendTo(target && target.ws, { type: "fullState", state: message.state });
-      if (target) target.hasState = true;
-      room.pendingStateFor = undefined;
       return;
     }
 
@@ -1226,30 +1248,27 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // ---------- Конец игры ----------
-    if (message.type === "gameOver") {
-      const room = getRoom(ws);
-      if (!room || room.gameOverNotified) return;
-      room.gameOverNotified = true;
-      clearTimeout(room.autoTimer);
-      broadcastToRoom(room, { type: "gameOver", winner: message.winner });
-      return;
-    }
-
     // ---------- Игровые действия ----------
     if (message.type === "gameAction") {
       const room = getRoom(ws);
-      if (!room || room.phase !== "game") return;
-      if (ws.playerId !== room.turn) return;
+      if (!room || room.phase !== "game" || !room.mirror || room.mirror.gameOver) return;
+      if (ws.playerId !== room.turn || seatKind(room, ws.playerId) !== "human") return;
 
-      // Без валидного действия сообщение игнорируем: иначе applyActionWithRelations
-      // упадёт с TypeError и уронит весь процесс вместе со всеми комнатами
       const action = message.action;
       if (!action || typeof action !== "object" || !GAME_ACTION_KINDS.has(action.kind)) return;
 
-      ws.hasState = true;
+      const slot = room.players.find(p => p.ws === ws);
+      if (!slot) return;
 
-      const text = JSON.stringify(message);
+      const result = applyActionWithRelations(room, action, ws.playerId);
+      if (!result.success) {
+        restorePlayerState(room, slot);
+        return;
+      }
+      slot.hasState = true;
+      if (action.kind === "endTurn") action.next = room.mirror.currentPlayer;
+
+      const text = JSON.stringify({ type: "gameAction", action });
       for (const player of room.players) {
         if (player.ws === ws || !player.ws) continue;
         try {
@@ -1266,14 +1285,13 @@ wss.on("connection", (ws) => {
         }
       }
 
-      applyActionWithRelations(room, message.action, ws.playerId);
-
-      if (message.action && message.action.kind === "endTurn") {
+      if (action.kind === "endTurn") {
         room.turn = room.mirror.currentPlayer;
         sendRelations(room);
         sendTurnChecksum(room);
-        armTurnDriver(room);
       }
+      broadcastGameOver(room);
+      if (action.kind === "endTurn") armTurnDriver(room);
       return;
     }
 
@@ -1306,6 +1324,7 @@ wss.on("connection", (ws) => {
     }
 
     if (guestId !== null && playerId === null) {
+      releaseGuestSeat(room, guestId);
       room.guests = (room.guests || []).filter(g => g.guestId !== guestId);
       sendRoomUpdate(room);
       return;

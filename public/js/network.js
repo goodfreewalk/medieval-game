@@ -1,3 +1,5 @@
+import { BUILD } from "./build.js";
+
 // Адрес сервера: тот же, с которого открыта страница
 const protocol = location.protocol === "https:" ? "wss:" : "ws:";
 const SERVER_URL = `${protocol}//${location.host}`;
@@ -61,7 +63,8 @@ function connectToServer() {
       sendMessage({
         type: "rejoinRoom",
         roomCode: session.roomCode,
-        playerId: session.playerId
+        playerId: session.playerId,
+        build: BUILD
       });
     }
   };
@@ -96,10 +99,14 @@ function connectToServer() {
   };
 }
 
+export function isNetworkConnected() {
+  return !!socket && socket.readyState === WebSocket.OPEN;
+}
+
 export function sendMessage(message) {
-  if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(message));
-  }
+  if (!isNetworkConnected()) return false;
+  socket.send(JSON.stringify(message));
+  return true;
 }
 
 export function createRoom(name) {

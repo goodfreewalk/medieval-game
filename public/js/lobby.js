@@ -41,27 +41,50 @@ function isSpectator() {
 
 // ---------- Карточки резюма ----------
 
-export function upsertResumeCard(code, playerId, token) {
-  if (!code) return;
+export function upsertResumeCard(code, playerId, type, data = {}) {
+  if (!code || (type !== "active" && type !== "saved")) return;
   const cards = readResumeCards();
-  cards[code] = { code, playerId, token, at: Date.now() };
+  const key = `${type}:${code}`;
+  cards[key] = { ...cards[key], ...data, code, playerId, type, at: Date.now() };
   localStorage.setItem(RESUME_KEY, JSON.stringify(cards));
   renderResumeCards();
 }
 
-export function removeResumeCard(code) {
+export function removeResumeCard(code, type = null) {
   const cards = readResumeCards();
-  delete cards[code];
+  if (type) delete cards[`${type}:${code}`];
+  else {
+    delete cards[`active:${code}`];
+    delete cards[`saved:${code}`];
+  }
   localStorage.setItem(RESUME_KEY, JSON.stringify(cards));
   renderResumeCards();
 }
 
 function readResumeCards() {
+  let stored;
   try {
-    return JSON.parse(localStorage.getItem(RESUME_KEY)) || {};
+    stored = JSON.parse(localStorage.getItem(RESUME_KEY)) || {};
   } catch {
     return {};
   }
+
+  const cards = {};
+  let migrated = false;
+  for (const [key, card] of Object.entries(stored)) {
+    if (!card || !card.code) continue;
+    const type = card.type === "active" || card.type === "saved"
+      ? card.type
+      : card.token ? "saved" : "active";
+    const normalizedKey = `${type}:${card.code}`;
+    cards[normalizedKey] = { ...card, type };
+    if (key !== normalizedKey || card.type !== type) migrated = true;
+  }
+
+  if (migrated) {
+    try { localStorage.setItem(RESUME_KEY, JSON.stringify(cards)); } catch {}
+  }
+  return cards;
 }
 
 function renderResumeCards() {
@@ -69,34 +92,71 @@ function renderResumeCards() {
   if (!box) return;
   box.innerHTML = "";
 
-  const cards = Object.values(readResumeCards())
-    .sort((a, b) => (b.at || 0) - (a.at || 0));
+  const allCards = Object.values(readResumeCards());
+  for (const type of ["active", "saved"]) {
+    const cards = allCards
+      .filter(card => card.type === type)
+      .sort((a, b) => (b.at || 0) - (a.at || 0));
+    if (cards.length === 0) continue;
 
-  for (const card of cards) {
-    const row = document.createElement("div");
-    row.className = "resumeCard";
+    const title = document.createElement("div");
+    title.className = "resumeGroupTitle";
+    title.textContent = t(type === "active" ? "activeGamesTitle" : "resumeCardsTitle");
+    box.appendChild(title);
 
-    const btn = document.createElement("button");
-    btn.className = "resumeCardButton";
-    btn.textContent = `${t("resumeCard")}: ${card.code}`;
-    btn.addEventListener("click", () => {
-      sendMessage({
-        type: "resumeGame",
-        roomCode: card.code,
-        token: card.token,
-        name: (el("nickname").value || "").trim() || t("defaultName"),
-        build: BUILD
+    for (const card of cards) {
+      const row = document.createElement("div");
+      row.className = "resumeCard";
+
+      const btn = document.createElement("button");
+      btn.className = "resumeCardButton";
+      const label = document.createElement("span");
+      const labelKey = type === "active"
+        ? "resumeActiveCard"
+        : card.playerId === 1 ? "resumeHostCard" : "resumeJoinCard";
+      label.textContent = `${t(labelKey)}: ${card.code}`;
+      btn.appendChild(label);
+
+      if (type === "saved") {
+        const mapDef = getMapById(card.mapId || "classic");
+        const date = new Date(card.savedAt || card.at).toLocaleString();
+        const meta = document.createElement("span");
+        meta.className = "resumeCardMeta";
+        meta.textContent = `${date} · ${t(mapDef.nameKey)} · ` +
+          `${t("turn")}: ${card.turn ?? "?"} · ${t("roomLabel")}: ${card.code}`;
+        btn.appendChild(meta);
+      }
+
+      btn.addEventListener("click", () => {
+        const name = (el("nickname").value || "").trim() || t("defaultName");
+        if (card.type === "saved" && card.playerId === 1 && card.token) {
+          sendMessage({
+            type: "resumeGame",
+            roomCode: card.code,
+            token: card.token,
+            name,
+            build: BUILD
+          });
+        } else {
+          sendMessage({
+            type: "joinRoom",
+            roomCode: card.code,
+            preferredSeat: card.playerId,
+            name,
+            build: BUILD
+          });
+        }
       });
-    });
 
-    const del = document.createElement("button");
-    del.className = "resumeCardDelete";
-    del.textContent = "✕";
-    del.addEventListener("click", () => removeResumeCard(card.code));
+      const del = document.createElement("button");
+      del.className = "resumeCardDelete";
+      del.textContent = "✕";
+      del.addEventListener("click", () => removeResumeCard(card.code, card.type));
 
-    row.appendChild(btn);
-    row.appendChild(del);
-    box.appendChild(row);
+      row.appendChild(btn);
+      row.appendChild(del);
+      box.appendChild(row);
+    }
   }
 }
 
@@ -323,7 +383,7 @@ function renderSeatDraft(update) {
         : d.kind === "passive"
           ? t("seatPassive")
           : d.kind === "eliminate"
-            ? t("seatEliminated")
+            ? t("seatEliminate")
             : t("seatHuman");
       const span = document.createElement("span");
       span.textContent = kindText;
@@ -338,7 +398,7 @@ function renderSeatDraft(update) {
       { value: "passive", text: t("seatPassive") },
       { value: "bot:balanced", text: t("botBalanced") },
       { value: "bot:aggressive", text: t("botAggressive") },
-      { value: "eliminate", text: t("seatEliminated") }
+      { value: "eliminate", text: t("seatEliminate") }
     ];
     for (const guest of guests) {
       options.push({ value: `human:${guest.guestId}`, text: guest.name });
@@ -401,6 +461,17 @@ function handleMessage(message) {
     return;
   }
 
+  if (message.type === "rejoinOk") {
+    myRoomCode = message.roomCode;
+    myPlayerId = message.playerId;
+    myGuestId = null;
+    mySpectatorId = null;
+    isHost = message.playerId === 1;
+    resumeLobby = false;
+    myReady = true;
+    return;
+  }
+
   if (message.type === "roomUpdate") {
     lastUpdate = message;
     renderLobby();
@@ -423,7 +494,7 @@ function handleMessage(message) {
   }
 
   if (message.type === "resumeStartedWithoutYou") {
-    backToMenu(t("resumeWithoutYou"));
+    backToMenu(t("startedWithoutYou"));
     return;
   }
 
@@ -501,7 +572,7 @@ export function initLobby(callbacks) {
   });
 
   el("startBtn").addEventListener("click", () => {
-    sendMessage({ type: "startGame" });
+    sendMessage({ type: resumeLobby ? "startResumeGame" : "startGame" });
   });
 
   el("leaveRoomBtn").addEventListener("click", () => {
