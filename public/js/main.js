@@ -502,7 +502,7 @@ function showGameOver(reason) {
   }
 
   if (reason !== t("connectionLost") && getRoomCode()) {
-    removeResumeCard(getRoomCode());
+    removeResumeCard(getRoomCode(), "active");
   }
 
   gameOverOverlay.classList.remove("hidden");
@@ -581,6 +581,7 @@ function leaveGame() {
   leaveGameBtn.textContent = t("leaveGame");
 
   sendMessage({ type: "leaveRoom" });
+  if (getRoomCode()) removeResumeCard(getRoomCode(), "active");
 
   stopTurnTimer();
   clearGameSession();
@@ -1231,6 +1232,8 @@ onNetworkMessage((message) => {
     refreshGame();
   } else if (message.type === "gameGone") {
     clearGameSession();
+    const code = message.roomCode || getRoomCode();
+    if (code) removeResumeCard(code, "active");
 
     if (state.map && !state.gameOver) {
       state.gameOver = true;
@@ -1273,8 +1276,14 @@ onNetworkMessage((message) => {
         sendMessage({ type: "resyncRequest", local });
       }
     }
-  } else if (message.type === "saveOk") {
-    upsertResumeCard(getRoomCode(), getMyPlayerId(), message.token);
+  } else if (message.type === "saveOk" || message.type === "saveAvailable") {
+    upsertResumeCard(getRoomCode(), getMyPlayerId(), "saved", {
+      token: message.token || null,
+      savedAt: message.savedAt,
+      mapId: message.mapId,
+      turn: message.turn,
+      seats: message.seats
+    });
     setNetStatus(t("gameSaved"));
     setTimeout(() => setNetStatus(""), 2500);
   } else if (message.type === "guestRequest") {
@@ -1369,7 +1378,7 @@ initLobby({
 
       if (getMyPlayerId()) {
         saveGameSession(getRoomCode(), getMyPlayerId());
-        upsertResumeCard(getRoomCode(), getMyPlayerId(), null);
+        upsertResumeCard(getRoomCode(), getMyPlayerId(), "active");
       }
       applyLanguage();
       return;
@@ -1393,7 +1402,7 @@ initLobby({
 
     if (getMyPlayerId()) {
       saveGameSession(getRoomCode(), getMyPlayerId());
-      upsertResumeCard(getRoomCode(), getMyPlayerId(), null);
+      upsertResumeCard(getRoomCode(), getMyPlayerId(), "active");
     }
 
     if (isMyTurn()) {
