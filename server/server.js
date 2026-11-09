@@ -524,7 +524,12 @@ function restorePlayerState(room, slot) {
   }
 
   slot.hasState = true;
-  sendTo(slot.ws, { type: "fullState", state: room.mirror });
+  sendTo(slot.ws, {
+    type: "fullState",
+    roomCode: slot.ws.roomCode,
+    playerId: slot.id,
+    state: room.mirror
+  });
 }
 
 // ---------- Устранения ----------
@@ -716,32 +721,36 @@ wss.on("connection", (ws) => {
 
       if (rooms.has(code)) {
         const existing = rooms.get(code);
-        const statefulConnected = existing.players.some(p => !p.disconnected && p.hasState);
+        const slot = existing.players.find(p => p.id === 1);
 
+        // Даже в игре только с ботами сначала возвращаем хоста в живую комнату,
+        // а не заменяем её более старым сохранением.
+        if (slot && slot.disconnected) {
+          slot.ws = ws;
+          slot.disconnected = false;
+          slot.hasState = false;
+          clearTimeout(slot.disconnectTimer);
+          slot.disconnectTimer = null;
+          ws.roomCode = code;
+          ws.playerId = 1;
+
+          sendTo(ws, { type: "rejoinOk", playerId: 1, roomCode: code });
+          for (const player of existing.players) {
+            if (player.id !== 1) sendTo(player.ws, { type: "opponentReconnected", playerId: 1 });
+          }
+          restorePlayerState(existing, slot);
+          sendRelations(existing);
+          armTurnDriver(existing);
+          return;
+        }
+
+        const statefulConnected = existing.players.some(p => !p.disconnected && p.hasState);
         if (!statefulConnected) {
           clearTimeout(existing.autoTimer);
           for (const p of existing.players) clearTimeout(p.disconnectTimer);
           for (const guest of existing.guests || []) sendTo(guest.ws, { type: "roomClosed", code: "hostLeft" });
           rooms.delete(code);
         } else {
-          const slot = existing.players.find(p => p.id === 1);
-          if (slot && slot.disconnected) {
-            slot.ws = ws;
-            slot.disconnected = false;
-            slot.hasState = false;
-            clearTimeout(slot.disconnectTimer);
-            slot.disconnectTimer = null;
-            ws.roomCode = code;
-            ws.playerId = 1;
-
-            sendTo(ws, { type: "rejoinOk", playerId: 1, roomCode: code });
-            for (const player of existing.players) {
-              if (player.id !== 1) sendTo(player.ws, { type: "opponentReconnected", playerId: 1 });
-            }
-            restorePlayerState(existing, slot);
-            sendRelations(existing);
-            return;
-          }
           sendTo(ws, { type: "error", code: "gameInProgress" });
           return;
         }
@@ -825,6 +834,7 @@ wss.on("connection", (ws) => {
             }
             restorePlayerState(room, slot);
             sendRelations(room);
+            armTurnDriver(room);
             return;
           }
           sendTo(ws, { type: "error", code: "roomFull" });
@@ -1091,7 +1101,22 @@ wss.on("connection", (ws) => {
         resume: true,
         relations: room.relations
       });
-      broadcastToRoom(room, { type: "fullState", state: room.mirror });
+      for (const player of players) {
+        sendTo(player.ws, {
+          type: "fullState",
+          roomCode: ws.roomCode,
+          playerId: player.id,
+          state: room.mirror
+        });
+      }
+      for (const spec of room.spectators || []) {
+        sendTo(spec.ws, {
+          type: "fullState",
+          roomCode: ws.roomCode,
+          playerId: null,
+          state: room.mirror
+        });
+      }
       sendTurnChecksum(room);
 
       for (const player of players) player.hasState = true;
@@ -1210,6 +1235,7 @@ wss.on("connection", (ws) => {
       }
       restorePlayerState(room, slot);
       sendRelations(room);
+      armTurnDriver(room);
       return;
     }
 
@@ -1223,7 +1249,12 @@ wss.on("connection", (ws) => {
       console.log(
         `[sync] место ${ws.playerId} запросило ресинк: local=${message.local || "?"}, mirror=${mirrorSum}`
       );
-      sendTo(ws, { type: "fullState", state: room.mirror });
+      sendTo(ws, {
+        type: "fullState",
+        roomCode: ws.roomCode,
+        playerId: ws.playerId,
+        state: room.mirror
+      });
       return;
     }
 

@@ -123,7 +123,7 @@ function renderResumeCards() {
         const meta = document.createElement("span");
         meta.className = "resumeCardMeta";
         meta.textContent = `${date} · ${t(mapDef.nameKey)} · ` +
-          `${t("turn")}: ${card.turn ?? "?"} · ${t("roomLabel")}: ${card.code}`;
+          `${t("turn")}: ${card.turn ?? "?"}`;
         btn.appendChild(meta);
       }
 
@@ -581,6 +581,16 @@ export function initLobby(callbacks) {
   });
 
   renderResumeCards();
+}
+
+export function restorePlayerIdentity(roomCode, playerId) {
+  myRoomCode = roomCode;
+  myPlayerId = playerId;
+  myGuestId = null;
+  mySpectatorId = null;
+  isHost = playerId === 1;
+  resumeLobby = false;
+  myReady = true;
 }
 
 export function getMyPlayerId() {
