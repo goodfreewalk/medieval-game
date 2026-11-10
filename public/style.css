@@ -190,6 +190,11 @@ select:focus {
   text-transform: uppercase;
 }
 
+#roomCodeInput::placeholder {
+  color: rgba(238, 238, 238, 0.5);
+  text-transform: none;
+}
+
 #menuStatus,
 #lobbyStatus {
   min-height: 18px;
@@ -387,6 +392,26 @@ select:focus {
   color: #9a9aa5;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+/* Подсказка появляется только после выбора клетки и не перехватывает клики */
+#infoBox {
+  align-self: center;
+  width: min(520px, 100%);
+  background: rgba(20, 20, 30, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+#info {
+  margin: 0;
+  font-size: 13px;
+  color: #cfcfd6;
+  line-height: 1.45;
+  text-align: center;
 }
 
 /* Строка хода: карта доступна сквозь текст и фон, кнопка остаётся активной */
