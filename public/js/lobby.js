@@ -548,6 +548,7 @@ function backToMenu(text) {
 export function initLobby(callbacks) {
   onGameStartCb = callbacks.onGameStart;
 
+  el("roomCodeInput").placeholder = t("roomCodePlaceholder");
   onNetworkMessage(handleMessage);
 
   el("createRoomBtn").addEventListener("click", () => {

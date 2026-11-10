@@ -12,13 +12,14 @@ import {
   getLanguage,
   setLanguage,
   t,
+  terrainName,
   unitName
 } from "./i18n.js";
 import {
   getUnitAtTile,
   UNIT_TYPES
 } from "./units.js";
-import { TERRAIN } from "./terrain.js";
+import { TERRAIN, TERRAIN_DEFENSE, TERRAIN_COST } from "./terrain.js";
 import { drawGame } from "./render.js";
 import { computeChecksum } from "./checksum.js";
 import { showScreen } from "./screens.js";
@@ -51,6 +52,8 @@ import {
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
+const infoBox = document.getElementById("infoBox");
+const info = document.getElementById("info");
 const turnInfo = document.getElementById("turnInfo");
 const timerElement = document.getElementById("timer");
 const endTurnButton = document.getElementById("endTurn");
@@ -254,6 +257,78 @@ function updateResources() {
     `</div>`;
 }
 
+let infoTimer = null;
+
+function hideInfo() {
+  clearTimeout(infoTimer);
+  infoTimer = null;
+  infoBox.classList.add("hidden");
+}
+
+function updateInfo() {
+  clearTimeout(infoTimer);
+  infoTimer = null;
+
+  if (state.gameOver || (!state.selectedUnit && !state.selectedTile)) {
+    infoBox.classList.add("hidden");
+    return;
+  }
+
+  if (state.selectedUnit) {
+    const unit = state.selectedUnit;
+    const type = UNIT_TYPES[unit.type];
+
+    let text =
+      `${unitName(unit.type)} | ` +
+      `${t("player")}: ${unit.owner} | ` +
+      `❤️ ${unit.hp}`;
+
+    text += ` | ⚔️ ${type.attack} | 🛡️ ${type.defense} | 👣 ${type.movement}`;
+
+    if (unit.owner === state.currentPlayer) {
+      if (unit.hasAttacked) {
+        text += ` | ${t("acted")}`;
+      } else if (unit.movementLeft < type.movement) {
+        text += ` | ${t("moved")}`;
+      } else {
+        text += ` | ${t("ready")}`;
+      }
+    }
+
+    info.textContent = text;
+  } else {
+    const terrain = state.map[state.selectedTile.y][state.selectedTile.x];
+    const terrainDef = TERRAIN_DEFENSE[terrain] || 0;
+    const terrainCost = TERRAIN_COST[terrain];
+
+    let text = terrainName(terrain);
+    text += terrainCost === Infinity ? " | 🚫" : ` | 👣 ${terrainCost}`;
+
+    if (terrainDef > 0) {
+      text += ` | 🛡️ +${terrainDef}`;
+    }
+
+    if (terrain === TERRAIN.VILLAGE || terrain === TERRAIN.CASTLE) {
+      const owner = getTileOwner(state.selectedTile.x, state.selectedTile.y);
+      const isCastle = terrain === TERRAIN.CASTLE;
+
+      text += ` | 💰 +${isCastle ? 6 : 2} | 📦 +${isCastle ? 3 : 1}`;
+
+      if (owner !== 0) {
+        text += ` | 🚩 ${owner}`;
+      }
+    }
+
+    info.textContent = text;
+  }
+
+  infoBox.classList.remove("hidden");
+  infoTimer = setTimeout(() => {
+    infoBox.classList.add("hidden");
+    infoTimer = null;
+  }, 4000);
+}
+
 // Закрыть окно найма и снять выделение
 function closeRecruitPanel() {
   state.selectedTile = null;
@@ -261,6 +336,7 @@ function closeRecruitPanel() {
   state.reachableTiles = new Map();
   state.attackableTiles = new Map();
 
+  hideInfo();
   updateRecruitPanel();
   drawGame();
 }
@@ -411,6 +487,7 @@ function refreshGame() {
 function applyLanguage() {
   langSelect.value = getLanguage();
 
+  document.getElementById("roomCodeInput").placeholder = t("roomCodePlaceholder");
   endTurnButton.textContent = t("endTurn");
   playAgainButton.textContent = t("playAgain");
   saveGameBtn.textContent = t("saveGame");
@@ -419,6 +496,9 @@ function applyLanguage() {
     leaveGameBtn.textContent = t("leaveGame");
   }
 
+  if (!infoBox.classList.contains("hidden")) {
+    updateInfo();
+  }
   refreshGame();
 
   if (state.gameOver) {
@@ -428,6 +508,7 @@ function applyLanguage() {
 
 function showGameOver(reason) {
   stopTurnTimer();
+  hideInfo();
   clearGuestRequests();
 
   // При потере соединения сессию НЕ чистим: после перезагрузки
@@ -519,6 +600,7 @@ function leaveGame() {
   if (getRoomCode()) removeResumeCard(getRoomCode(), "active");
 
   stopTurnTimer();
+  hideInfo();
   clearGameSession();
   clearGuestRequests();
   setStickyStatus("");
@@ -544,6 +626,7 @@ function serializeState() {
 }
 
 function applyFullState(snapshot) {
+  hideInfo();
   state.map = snapshot.map;
   state.units = snapshot.units;
   state.owners = new Map(snapshot.owners);
@@ -807,6 +890,7 @@ function initCamera() {
 }
 
 function zoomAt(localX, localY, newZoom) {
+  hideInfo();
   const clamped = Math.max(minZoom, Math.min(maxZoom, newZoom));
   const worldX = (localX - state.panX) / state.zoom;
   const worldY = (localY - state.panY) / state.zoom;
@@ -887,6 +971,7 @@ gameContainer.addEventListener("touchmove", (e) => {
 
     if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
       dragMoved = true;
+      hideInfo();
     }
 
     state.panX = dragStartPanX + dx;
@@ -945,6 +1030,7 @@ window.addEventListener("mousemove", (e) => {
 
   if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
     dragMoved = true;
+    hideInfo();
   }
 
   state.panX = dragStartPanX + dx;
@@ -997,6 +1083,7 @@ window.addEventListener("keydown", (e) => {
   }
 
   e.preventDefault();
+  hideInfo();
 
   state.panX += dx;
   state.panY += dy;
@@ -1042,6 +1129,7 @@ canvas.addEventListener("click", (event) => {
     state.reachableTiles = new Map();
     state.attackableTiles = new Map();
 
+    hideInfo();
     updateRecruitPanel();
     drawGame();
     return;
@@ -1065,6 +1153,7 @@ canvas.addEventListener("click", (event) => {
     state.selectedUnit = clickedUnit;
     state.selectedTile = tile;
     updateSelectionHighlights();
+    updateInfo();
     updateRecruitPanel();
     drawGame();
     return;
@@ -1087,6 +1176,7 @@ canvas.addEventListener("click", (event) => {
   state.selectedUnit = null;
   state.selectedTile = tile;
   updateSelectionHighlights();
+  updateInfo();
   updateRecruitPanel();
   drawGame();
 });
