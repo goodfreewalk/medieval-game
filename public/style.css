@@ -190,6 +190,11 @@ select:focus {
   text-transform: uppercase;
 }
 
+#roomCodeInput::placeholder {
+  color: rgba(238, 238, 238, 0.5);
+  text-transform: none;
+}
+
 #menuStatus,
 #lobbyStatus {
   min-height: 18px;
@@ -325,11 +330,9 @@ select:focus {
   display: block;
 }
 
-/* ----- HUD: две стороны (инфо / управление) -----
-   Портрет (база): инфо-сторона растянута сверху донизу
-   (ресурсы сверху, инфо снизу над управленческой стопкой),
-   управленческая сторона — стопка строк внизу.
-   Ландшафт (медиа-запрос): стороны становятся боковыми столбцами. */
+/* ----- HUD: ресурсы / управление -----
+   Портрет: ресурсы по центру сверху, управление стопкой внизу.
+   Ландшафт: стороны становятся боковыми столбцами. */
 
 #hudSideA {
   position: absolute;
@@ -359,8 +362,8 @@ select:focus {
   display: flex;
   flex-direction: row;
   gap: 8px;
-  pointer-events: auto;
-  align-self: flex-start;
+  pointer-events: none;
+  align-self: center;
 }
 
 .statCard {
@@ -368,11 +371,11 @@ select:focus {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  background: rgba(20, 20, 30, 0.72);
+  background: rgba(20, 20, 30, 0.52);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   padding: 6px 10px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.25);
 }
 
 .statIcon {
@@ -391,13 +394,16 @@ select:focus {
   letter-spacing: 0.5px;
 }
 
-/* Инфо о клетке/юните */
+/* Подсказка появляется только после выбора клетки и не перехватывает клики */
 #infoBox {
-  background: rgba(20, 20, 30, 0.72);
+  align-self: center;
+  width: min(520px, 100%);
+  background: rgba(20, 20, 30, 0.78);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 12px;
   padding: 8px 12px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
 }
 
 #info {
@@ -408,7 +414,7 @@ select:focus {
   text-align: center;
 }
 
-/* Строка хода: пилюля + таймер + кнопка в ряд */
+/* Строка хода: карта доступна сквозь текст и фон, кнопка остаётся активной */
 #turnRow {
   display: flex;
   flex-direction: row;
@@ -419,7 +425,7 @@ select:focus {
   border-radius: 12px;
   padding: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  pointer-events: auto;
+  pointer-events: none;
 }
 
 #turnInfo {
@@ -453,6 +459,7 @@ select:focus {
   font-size: 14px;
   background: linear-gradient(180deg, #46a758, #2f7e3f);
   box-shadow: 0 3px 0 #1d5427, 0 6px 14px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
 }
 
 #endTurn:active {
@@ -529,10 +536,6 @@ select:focus {
 
   #menuRow {
     flex-direction: column;
-  }
-
-  #info {
-    text-align: left;
   }
 }
 

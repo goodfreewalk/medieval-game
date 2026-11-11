@@ -34,7 +34,7 @@ const EMOJI_FONT =
 
 // Разрешение спрайта: с запасом под максимальный зум и hi-dpi.
 // Если на самом глубоком зуме захочется чётче — подними эту константу
-const SPRITE_RES = 512;
+const SPRITE_RES = 256;
 
 const spriteCache = new Map();
 
@@ -164,10 +164,18 @@ function drawFrame() {
 
   const T = state.tileSize;
   const size = state.map.length;
+  const left = -state.panX / state.zoom;
+  const top = -state.panY / state.zoom;
+  const right = (state.viewW - state.panX) / state.zoom;
+  const bottom = (state.viewH - state.panY) / state.zoom;
+  const minX = Math.max(0, Math.floor(left / T) - 1);
+  const minY = Math.max(0, Math.floor(top / T) - 1);
+  const maxX = Math.min(size - 1, Math.ceil(right / T) + 1);
+  const maxY = Math.min(size - 1, Math.ceil(bottom / T) + 1);
 
-  // ----- Клетки местности -----
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
+  // ----- Клетки местности: только видимая камерой область -----
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
       const px = x * T;
       const py = y * T;
       const terrain = state.map[y][x];
@@ -207,8 +215,8 @@ function drawFrame() {
   }
 
   // ----- Здания: рамка и флаг владельца -----
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
       const terrain = state.map[y][x];
 
       if (terrain !== TERRAIN.CASTLE && terrain !== TERRAIN.VILLAGE) {
@@ -262,6 +270,7 @@ function drawFrame() {
   // ----- Юниты (с плавным скольжением и спрайт-иконками) -----
   for (const unit of state.units) {
     const vp = visualPos.get(unit.id) || { x: unit.x, y: unit.y };
+    if (vp.x < minX || vp.x > maxX || vp.y < minY || vp.y > maxY) continue;
     const cx = vp.x * T + T / 2;
     const cy = vp.y * T + T / 2;
 

@@ -123,7 +123,7 @@ function renderResumeCards() {
         const meta = document.createElement("span");
         meta.className = "resumeCardMeta";
         meta.textContent = `${date} · ${t(mapDef.nameKey)} · ` +
-          `${t("turn")}: ${card.turn ?? "?"} · ${t("roomLabel")}: ${card.code}`;
+          `${t("turn")}: ${card.turn ?? "?"}`;
         btn.appendChild(meta);
       }
 
@@ -548,6 +548,7 @@ function backToMenu(text) {
 export function initLobby(callbacks) {
   onGameStartCb = callbacks.onGameStart;
 
+  el("roomCodeInput").placeholder = t("roomCodePlaceholder");
   onNetworkMessage(handleMessage);
 
   el("createRoomBtn").addEventListener("click", () => {
@@ -581,6 +582,16 @@ export function initLobby(callbacks) {
   });
 
   renderResumeCards();
+}
+
+export function restorePlayerIdentity(roomCode, playerId) {
+  myRoomCode = roomCode;
+  myPlayerId = playerId;
+  myGuestId = null;
+  mySpectatorId = null;
+  isHost = playerId === 1;
+  resumeLobby = false;
+  myReady = true;
 }
 
 export function getMyPlayerId() {

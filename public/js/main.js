@@ -28,7 +28,8 @@ import {
   getMyPlayerId,
   getRoomCode,
   upsertResumeCard,
-  removeResumeCard
+  removeResumeCard,
+  restorePlayerIdentity
 } from "./lobby.js";
 import {
   onNetworkMessage,
@@ -51,6 +52,7 @@ import {
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
+const infoBox = document.getElementById("infoBox");
 const info = document.getElementById("info");
 const turnInfo = document.getElementById("turnInfo");
 const timerElement = document.getElementById("timer");
@@ -255,7 +257,23 @@ function updateResources() {
     `</div>`;
 }
 
+let infoTimer = null;
+
+function hideInfo() {
+  clearTimeout(infoTimer);
+  infoTimer = null;
+  infoBox.classList.add("hidden");
+}
+
 function updateInfo() {
+  clearTimeout(infoTimer);
+  infoTimer = null;
+
+  if (state.gameOver || (!state.selectedUnit && !state.selectedTile)) {
+    infoBox.classList.add("hidden");
+    return;
+  }
+
   if (state.selectedUnit) {
     const unit = state.selectedUnit;
     const type = UNIT_TYPES[unit.type];
@@ -278,22 +296,13 @@ function updateInfo() {
     }
 
     info.textContent = text;
-    return;
-  }
-
-  if (state.selectedTile) {
+  } else {
     const terrain = state.map[state.selectedTile.y][state.selectedTile.x];
     const terrainDef = TERRAIN_DEFENSE[terrain] || 0;
     const terrainCost = TERRAIN_COST[terrain];
-    const isPassable = terrainCost !== Infinity;
 
     let text = terrainName(terrain);
-
-    if (!isPassable) {
-      text += ` | 🚫`;
-    } else {
-      text += ` | 👣 ${terrainCost}`;
-    }
+    text += terrainCost === Infinity ? " | 🚫" : ` | 👣 ${terrainCost}`;
 
     if (terrainDef > 0) {
       text += ` | 🛡️ +${terrainDef}`;
@@ -311,10 +320,13 @@ function updateInfo() {
     }
 
     info.textContent = text;
-    return;
   }
 
-  info.textContent = t("infoDefault");
+  infoBox.classList.remove("hidden");
+  infoTimer = setTimeout(() => {
+    infoBox.classList.add("hidden");
+    infoTimer = null;
+  }, 4000);
 }
 
 // Закрыть окно найма и снять выделение
@@ -324,8 +336,8 @@ function closeRecruitPanel() {
   state.reachableTiles = new Map();
   state.attackableTiles = new Map();
 
+  hideInfo();
   updateRecruitPanel();
-  updateInfo();
   drawGame();
 }
 
@@ -459,7 +471,6 @@ function refreshGame() {
   resourcesElement.style.display = getMyPlayerId() ? "" : "none";
   updateResources();
   updateRecruitPanel();
-  updateInfo();
 
   saveGameBtn.style.display =
     getMyPlayerId() === 1 && state.map && !state.gameOver ? "" : "none";
@@ -476,6 +487,7 @@ function refreshGame() {
 function applyLanguage() {
   langSelect.value = getLanguage();
 
+  document.getElementById("roomCodeInput").placeholder = t("roomCodePlaceholder");
   endTurnButton.textContent = t("endTurn");
   playAgainButton.textContent = t("playAgain");
   saveGameBtn.textContent = t("saveGame");
@@ -484,6 +496,9 @@ function applyLanguage() {
     leaveGameBtn.textContent = t("leaveGame");
   }
 
+  if (!infoBox.classList.contains("hidden")) {
+    updateInfo();
+  }
   refreshGame();
 
   if (state.gameOver) {
@@ -493,6 +508,7 @@ function applyLanguage() {
 
 function showGameOver(reason) {
   stopTurnTimer();
+  hideInfo();
   clearGuestRequests();
 
   // При потере соединения сессию НЕ чистим: после перезагрузки
@@ -584,6 +600,7 @@ function leaveGame() {
   if (getRoomCode()) removeResumeCard(getRoomCode(), "active");
 
   stopTurnTimer();
+  hideInfo();
   clearGameSession();
   clearGuestRequests();
   setStickyStatus("");
@@ -609,6 +626,7 @@ function serializeState() {
 }
 
 function applyFullState(snapshot) {
+  hideInfo();
   state.map = snapshot.map;
   state.units = snapshot.units;
   state.owners = new Map(snapshot.owners);
@@ -847,7 +865,7 @@ function resizeCanvas() {
     return;
   }
 
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
 
   state.viewW = Math.round(rect.width);
   state.viewH = Math.round(rect.height);
@@ -872,6 +890,7 @@ function initCamera() {
 }
 
 function zoomAt(localX, localY, newZoom) {
+  hideInfo();
   const clamped = Math.max(minZoom, Math.min(maxZoom, newZoom));
   const worldX = (localX - state.panX) / state.zoom;
   const worldY = (localY - state.panY) / state.zoom;
@@ -952,6 +971,7 @@ gameContainer.addEventListener("touchmove", (e) => {
 
     if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
       dragMoved = true;
+      hideInfo();
     }
 
     state.panX = dragStartPanX + dx;
@@ -1010,6 +1030,7 @@ window.addEventListener("mousemove", (e) => {
 
   if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
     dragMoved = true;
+    hideInfo();
   }
 
   state.panX = dragStartPanX + dx;
@@ -1062,6 +1083,7 @@ window.addEventListener("keydown", (e) => {
   }
 
   e.preventDefault();
+  hideInfo();
 
   state.panX += dx;
   state.panY += dy;
@@ -1107,7 +1129,7 @@ canvas.addEventListener("click", (event) => {
     state.reachableTiles = new Map();
     state.attackableTiles = new Map();
 
-    updateInfo();
+    hideInfo();
     updateRecruitPanel();
     drawGame();
     return;
@@ -1307,6 +1329,9 @@ onNetworkMessage((message) => {
       showGameOver();
     }
   } else if (message.type === "fullState") {
+    if (message.roomCode && Number.isInteger(message.playerId)) {
+      restorePlayerIdentity(message.roomCode, message.playerId);
+    }
     applyFullState(message.state);
 
     if (pendingResume) {
