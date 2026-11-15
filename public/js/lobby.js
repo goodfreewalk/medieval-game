@@ -18,6 +18,8 @@ let onGameStartCb = null;
 const pendingSpectatorCards = new Map();
 
 const RESUME_KEY = "resumeCards";
+const AUTO_RESUME_MS = 60000;
+const MAX_SAVED_CARDS = 64;
 
 const PREVIEW_COLORS = {
   ".": "#7bb546",
@@ -70,15 +72,32 @@ function readResumeCards() {
   }
 
   const cards = {};
+  const now = Date.now();
   let migrated = false;
   for (const [key, card] of Object.entries(stored)) {
     if (!card || !card.code) continue;
     const type = card.type === "active" || card.type === "saved"
       ? card.type
       : card.token ? "saved" : "active";
+    if (
+      type === "active" &&
+      ((card.expiresAt && card.expiresAt <= now) ||
+        (!card.expiresAt && now - (card.at || 0) > AUTO_RESUME_MS))
+    ) {
+      migrated = true;
+      continue;
+    }
     const normalizedKey = `${type}:${card.code}`;
     cards[normalizedKey] = { ...card, type };
     if (key !== normalizedKey || card.type !== type) migrated = true;
+  }
+
+  const savedCards = Object.values(cards)
+    .filter(card => card.type === "saved")
+    .sort((a, b) => (b.savedAt || b.at || 0) - (a.savedAt || a.at || 0));
+  for (const card of savedCards.slice(MAX_SAVED_CARDS)) {
+    delete cards[`saved:${card.code}`];
+    migrated = true;
   }
 
   if (migrated) {
@@ -117,15 +136,17 @@ function renderResumeCards() {
       label.textContent = `${t(labelKey)}: ${card.code}`;
       btn.appendChild(label);
 
+      const meta = document.createElement("span");
+      meta.className = "resumeCardMeta";
       if (type === "saved") {
         const mapDef = getMapById(card.mapId || "classic");
         const date = new Date(card.savedAt || card.at).toLocaleString();
-        const meta = document.createElement("span");
-        meta.className = "resumeCardMeta";
         meta.textContent = `${date} · ${t(mapDef.nameKey)} · ` +
           `${t("turn")}: ${card.turn ?? "?"}`;
-        btn.appendChild(meta);
+      } else {
+        meta.textContent = t("activeCardMeta");
       }
+      btn.appendChild(meta);
 
       btn.addEventListener("click", () => {
         const name = (el("nickname").value || "").trim() || t("defaultName");
@@ -142,6 +163,7 @@ function renderResumeCards() {
             type: "joinRoom",
             roomCode: card.code,
             preferredSeat: card.playerId,
+            resumeSaved: card.type === "saved",
             name,
             build: BUILD
           });
@@ -504,6 +526,12 @@ function handleMessage(message) {
   }
 
   if (message.type === "error") {
+    if (
+      (message.code === "roomNotFound" || message.code === "resumeNotOpened") &&
+      message.roomCode
+    ) {
+      removeResumeCard(message.roomCode, "active");
+    }
     const text = t(message.code) || message.code;
     const menuVisible = !el("menuScreen").classList.contains("hidden");
     if (menuVisible) el("menuStatus").textContent = text;
@@ -582,6 +610,9 @@ export function initLobby(callbacks) {
   });
 
   renderResumeCards();
+  setInterval(() => {
+    if (!el("menuScreen").classList.contains("hidden")) renderResumeCards();
+  }, 1000);
 }
 
 export function restorePlayerIdentity(roomCode, playerId) {
