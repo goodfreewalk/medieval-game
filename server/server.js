@@ -29,6 +29,7 @@ const MAX_SPECTATORS = 4;
 const SAVES_DIR = path.join(__dirname, "..", "saves");
 const SAVE_VERSION = 2;
 const SAVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_SAVES = 64;
 fs.mkdirSync(SAVES_DIR, { recursive: true });
 
 const AUTO_TURN_DELAY_MS = 4000;
@@ -94,14 +95,25 @@ function cleanOldSaves() {
   let files = [];
   try { files = fs.readdirSync(SAVES_DIR); } catch { return; }
   const now = Date.now();
+  const valid = [];
+
   for (const file of files) {
     const full = path.join(SAVES_DIR, file);
     try {
       const save = JSON.parse(fs.readFileSync(full, "utf8"));
-      if (!save || now - (save.savedAt || 0) > SAVE_TTL_MS) fs.unlinkSync(full);
+      if (!save || now - (save.savedAt || 0) > SAVE_TTL_MS) {
+        fs.unlinkSync(full);
+      } else {
+        valid.push({ full, savedAt: save.savedAt || 0 });
+      }
     } catch {
       try { fs.unlinkSync(full); } catch {}
     }
+  }
+
+  valid.sort((a, b) => b.savedAt - a.savedAt);
+  for (const entry of valid.slice(MAX_SAVES)) {
+    try { fs.unlinkSync(entry.full); } catch {}
   }
 }
 cleanOldSaves();
@@ -532,6 +544,24 @@ function restorePlayerState(room, slot) {
   });
 }
 
+// После 60 секунд место уже нельзя вернуть: живые игроки выбирают его судьбу.
+function expireDisconnect(room, code, playerId) {
+  const slot = room.players.find(p => p.id === playerId);
+  if (!slot || !slot.disconnected) return;
+  slot.disconnectExpired = true;
+
+  let targets = room.players.filter(p => !p.disconnected && p.id !== playerId);
+  if (playerId !== 1) targets = targets.filter(p => p.id === 1);
+  if (targets.length === 0) {
+    eliminateSeat(room, code, playerId);
+    return;
+  }
+
+  for (const target of targets) {
+    sendTo(target.ws, { type: "disconnectChoice", playerId });
+  }
+}
+
 // ---------- Устранения ----------
 
 function eliminateSeat(room, code, playerId) {
@@ -697,6 +727,7 @@ wss.on("connection", (ws) => {
 
       try {
         fs.writeFileSync(savePath(ws.roomCode), JSON.stringify(save));
+        cleanOldSaves();
         const info = {
           savedAt: save.savedAt,
           mapId: save.mapId,
@@ -722,39 +753,16 @@ wss.on("connection", (ws) => {
       if (rooms.has(code)) {
         const existing = rooms.get(code);
         const finished = existing.mirror && existing.mirror.gameOver;
-        const slot = finished ? null : existing.players.find(p => p.id === 1);
-
-        // Даже в игре только с ботами сначала возвращаем хоста в живую комнату,
-        // а не заменяем её более старым сохранением.
-        if (slot && slot.disconnected) {
-          slot.ws = ws;
-          slot.disconnected = false;
-          slot.hasState = false;
-          clearTimeout(slot.disconnectTimer);
-          slot.disconnectTimer = null;
-          ws.roomCode = code;
-          ws.playerId = 1;
-
-          sendTo(ws, { type: "rejoinOk", playerId: 1, roomCode: code });
-          for (const player of existing.players) {
-            if (player.id !== 1) sendTo(player.ws, { type: "opponentReconnected", playerId: 1 });
-          }
-          restorePlayerState(existing, slot);
-          sendRelations(existing);
-          armTurnDriver(existing);
-          return;
-        }
-
         const statefulConnected = existing.players.some(p => !p.disconnected && p.hasState);
-        if (finished || !statefulConnected) {
-          clearTimeout(existing.autoTimer);
-          for (const p of existing.players) clearTimeout(p.disconnectTimer);
-          for (const guest of existing.guests || []) sendTo(guest.ws, { type: "roomClosed", code: "hostLeft" });
-          rooms.delete(code);
-        } else {
+        if (!finished && statefulConnected) {
           sendTo(ws, { type: "error", code: "gameInProgress" });
           return;
         }
+
+        clearTimeout(existing.autoTimer);
+        for (const p of existing.players) clearTimeout(p.disconnectTimer);
+        for (const guest of existing.guests || []) sendTo(guest.ws, { type: "roomClosed", code: "hostLeft" });
+        rooms.delete(code);
       }
 
       const { save, error } = readSave(code);
@@ -819,15 +827,20 @@ wss.on("connection", (ws) => {
           sendTo(ws, { type: "gameGone", roomCode: code });
           return;
         }
+        if (message.resumeSaved) {
+          sendTo(ws, { type: "error", code: "resumeNotOpened", roomCode: code });
+          return;
+        }
 
         const wanted = message.preferredSeat;
         const seat = (room.seats || []).find(s => s.id === wanted);
 
         if (seat && seat.kind === "human") {
           const slot = room.players.find(p => p.id === wanted);
-          if (slot && slot.disconnected) {
+          if (slot && slot.disconnected && !slot.disconnectExpired) {
             slot.ws = ws;
             slot.disconnected = false;
+            slot.disconnectExpired = false;
             slot.hasState = false;
             clearTimeout(slot.disconnectTimer);
             slot.disconnectTimer = null;
@@ -843,7 +856,11 @@ wss.on("connection", (ws) => {
             armTurnDriver(room);
             return;
           }
-          sendTo(ws, { type: "error", code: "roomFull" });
+          if (slot && slot.disconnected && slot.disconnectExpired) {
+            sendTo(ws, { type: "gameGone", roomCode: code });
+          } else {
+            sendTo(ws, { type: "error", code: "roomFull" });
+          }
           return;
         }
 
@@ -1171,6 +1188,37 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    // ---------- Замена места после истечения возврата ----------
+    if (message.type === "resolveDisconnected") {
+      const room = getRoom(ws);
+      const playerId = message.playerId;
+      const kind = message.kind;
+      if (!room || room.phase !== "game" || !room.mirror || room.mirror.gameOver) return;
+      if (playerId !== 1 && ws.playerId !== 1) return;
+      if (kind !== "bot" && kind !== "passive" && kind !== "eliminate") return;
+
+      const slot = room.players.find(p => p.id === playerId);
+      const seat = (room.seats || []).find(s => s.id === playerId && s.kind === "human");
+      if (!slot || !slot.disconnected || !slot.disconnectExpired || !seat) return;
+
+      if (kind === "eliminate") {
+        eliminateSeat(room, ws.roomCode, playerId);
+        return;
+      }
+
+      room.players = room.players.filter(p => p !== slot);
+      seat.kind = kind;
+      seat.personality = kind === "bot" ? "balanced" : null;
+      loadMirror(room);
+      state.seatKinds[playerId] = kind;
+      saveMirror(room);
+      broadcastToRoom(room, { type: "playerReplaced", playerId, kind, seats: room.seats.slice() });
+      sendRelations(room);
+      sendTurnChecksum(room);
+      armTurnDriver(room);
+      return;
+    }
+
     // ---------- Выход ----------
     if (message.type === "leaveRoom") {
       const code = ws.roomCode;
@@ -1231,10 +1279,14 @@ wss.on("connection", (ws) => {
       }
 
       const slot = room.players.find(p => p.id === message.playerId);
-      if (!slot || !slot.disconnected) { sendTo(ws, { type: "gameGone", roomCode: message.roomCode }); return; }
+      if (!slot || !slot.disconnected || slot.disconnectExpired) {
+        sendTo(ws, { type: "gameGone", roomCode: message.roomCode });
+        return;
+      }
 
       slot.ws = ws;
       slot.disconnected = false;
+      slot.disconnectExpired = false;
       slot.hasState = false;
       clearTimeout(slot.disconnectTimer);
       slot.disconnectTimer = null;
@@ -1387,6 +1439,7 @@ wss.on("connection", (ws) => {
     const slot = room.players.find(p => p.id === playerId);
     if (!slot || slot.ws !== ws) return;
     slot.disconnected = true;
+    slot.disconnectExpired = false;
     slot.ws = null;
     for (const player of room.players) {
       if (player.id !== playerId) sendTo(player.ws, { type: "opponentDisconnected", playerId });
@@ -1395,9 +1448,7 @@ wss.on("connection", (ws) => {
     slot.disconnectTimer = setTimeout(() => {
       const current = rooms.get(code);
       if (!current) return;
-      const stillSlot = current.players.find(p => p.id === playerId);
-      if (!stillSlot || !stillSlot.disconnected) return;
-      eliminateSeat(current, code, playerId);
+      expireDisconnect(current, code, playerId);
     }, RECONNECT_GRACE_MS);
   });
 });

@@ -15,7 +15,7 @@ import {
   getSupplyUsed,
   getSupplyCapacity
 } from "../public/js/state.js";
-import { TERRAIN } from "../public/js/terrain.js";
+import { TERRAIN, TERRAIN_DEFENSE } from "../public/js/terrain.js";
 
 const THREAT_RADIUS = 4;     // радиус оценки угрозы дому (клеток)
 const THREAT_LEVEL = 30;     // порог силы врага у дома для режима обороны
@@ -161,10 +161,10 @@ function planRecruit(state, personality, ctx) {
 
   // В обороне приоритет — защитники у замка; иначе — ударная масса
   const order = ctx.defense
-    ? ["swordsman", "archer", "militia", "lightCavalry"]
+    ? ["swordsman", "archer", "militia", "lightCavalry", "horseArcher"]
     : personality === "aggressive"
-      ? ["heavyCavalry", "swordsman", "lightCavalry", "archer", "militia"]
-      : ["archer", "swordsman", "lightCavalry", "militia", "heavyCavalry"];
+      ? ["heavyCavalry", "swordsman", "lightCavalry", "horseArcher", "archer", "militia"]
+      : ["archer", "swordsman", "lightCavalry", "horseArcher", "militia", "heavyCavalry"];
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
@@ -189,7 +189,7 @@ function planRecruit(state, personality, ctx) {
 
 // ---------- Движение с ролями (разведение армии) ----------
 
-function collectTargets(state, me, personality, defense) {
+function collectTargets(state, me, personality, defense, relations) {
   const targets = [];
   const size = state.map.length;
 
@@ -213,7 +213,7 @@ function collectTargets(state, me, personality, defense) {
         });
       } else if (owner !== me) {
         // вражеские здания: вес зависит от отношения к владельцу
-        const rel = defense.active ? 0 : (state._rel?.[owner] ?? 0);
+        const rel = defense.active ? 0 : (relations?.[owner] ?? 0);
         targets.push({
           x, y,
           weight: (personality === "balanced" ? 1.5 : 2) *
@@ -226,7 +226,7 @@ function collectTargets(state, me, personality, defense) {
   if (!defense.active) {
     for (const unit of state.units) {
       if (unit.owner === me) continue;
-      const rel = state._rel?.[unit.owner] ?? 0;
+      const rel = relations?.[unit.owner] ?? 0;
       targets.push({
         x: unit.x, y: unit.y,
         weight: (personality === "aggressive" ? 2.5 : 1) *
@@ -240,9 +240,9 @@ function collectTargets(state, me, personality, defense) {
 
 function planMove(state, personality, ctx, defense) {
   const me = ctx.me;
-  state._rel = ctx.relations; // прокидываем в collectTargets
-  const targets = collectTargets(state, me, personality, defense);
-  state._rel = null;
+  const targets = collectTargets(
+    state, me, personality, defense, ctx.relations
+  );
   if (targets.length === 0) return null;
 
   let best = null;
@@ -251,37 +251,68 @@ function planMove(state, personality, ctx, defense) {
   for (const unit of state.units) {
     if (unit.owner !== me) continue;
     if (unit.hasAttacked || unit.movementLeft <= 0) continue;
-    if (unit.movementLeft < UNIT_TYPES[unit.type].movement) continue;
 
     const reach = getReachableTiles(unit);
     if (reach.size === 0) continue;
 
     for (const tile of reach.values()) {
-      // лучшая цель для этой клетки с учётом занятости других юнитов
+      // Цель и её занятость участвуют не только в выборе, но и в итоговой оценке.
       let targetScore = -Infinity;
+      let currentTargetScore = 0;
       let targetKey = null;
 
-      for (const t of targets) {
-        const dist = Math.abs(tile.x - t.x) + Math.abs(tile.y - t.y);
-        const usage = ctx.usage?.get(`${t.x},${t.y}`) || 0;
-        const s = t.weight / (dist + 1) - USAGE_PENALTY * usage;
-        if (s > targetScore) {
-          targetScore = s;
-          targetKey = `${t.x},${t.y}`;
+      for (const target of targets) {
+        const key = `${target.x},${target.y}`;
+        const usage = ctx.usage?.get(key) || 0;
+        const penalty = USAGE_PENALTY * usage;
+        const dist = Math.abs(tile.x - target.x) + Math.abs(tile.y - target.y);
+        const currentDist = Math.abs(unit.x - target.x) + Math.abs(unit.y - target.y);
+        const score = target.weight / (dist + 1) - penalty;
+
+        if (score > targetScore) {
+          targetScore = score;
+          currentTargetScore = target.weight / (currentDist + 1) - penalty;
+          targetKey = key;
         }
       }
 
-      const curDist = Math.min(
-        ...targets.map(t =>
-          (Math.abs(unit.x - t.x) + Math.abs(unit.y - t.y)) / t.weight
-        )
-      );
-      const newDist = Math.min(
-        ...targets.map(t =>
-          (Math.abs(tile.x - t.x) + Math.abs(tile.y - t.y)) / t.weight
-        )
-      );
-      const gain = (curDist - newDist) + rand(NOISE * 0.3);
+      const movedUnit = { ...unit, x: tile.x, y: tile.y };
+      const terrain = state.map[tile.y][tile.x];
+      const owner = getTileOwner(tile.x, tile.y);
+      let captureBonus = 0;
+      if (
+        owner !== me &&
+        (terrain === TERRAIN.CASTLE || terrain === TERRAIN.VILLAGE)
+      ) {
+        captureBonus = terrain === TERRAIN.CASTLE ? 7 : 4;
+      }
+
+      let attackBonus = 0;
+      let danger = 0;
+      for (const enemy of state.units) {
+        if (enemy.owner === me) continue;
+        const rel = ctx.relations?.[enemy.owner] ?? 0;
+        const distance = getDistance(movedUnit, enemy);
+
+        if (
+          distance <= UNIT_TYPES[unit.type].range &&
+          !(personality === "balanced" && rel >= 40)
+        ) {
+          const damage = calculateDamage(movedUnit, enemy);
+          let score = damage * 0.06 * relationWeight(personality, rel);
+          if (damage >= enemy.hp) score += 3 + UNIT_TYPES[enemy.type].cost * 0.03;
+          attackBonus = Math.max(attackBonus, score);
+        }
+
+        if (distance <= UNIT_TYPES[enemy.type].range) {
+          danger += calculateDamage(enemy, movedUnit) *
+            (personality === "aggressive" ? 0.012 : 0.025);
+        }
+      }
+
+      const defenseBonus = (TERRAIN_DEFENSE[terrain] || 0) * 0.035;
+      const gain = (targetScore - currentTargetScore) * 4 +
+        captureBonus + attackBonus + defenseBonus - danger + rand(NOISE * 0.15);
 
       if (gain > bestGain) {
         bestGain = gain;
@@ -291,9 +322,9 @@ function planMove(state, personality, ctx, defense) {
     }
   }
 
-  if (best && ctx.usage) {
+  if (best) {
     const key = best._targetKey;
-    if (key) ctx.usage.set(key, (ctx.usage.get(key) || 0) + 1);
+    if (ctx.usage && key) ctx.usage.set(key, (ctx.usage.get(key) || 0) + 1);
     delete best._targetKey;
   }
 

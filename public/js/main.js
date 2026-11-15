@@ -72,6 +72,7 @@ const guestRequests = document.getElementById("guestRequests");
 const gameContainer = document.getElementById("gameContainer");
 
 const pendingGuestRequests = new Map();
+const pendingDisconnectChoices = new Map();
 
 // «Липкий» статус: важное постоянное сообщение (например, «хост отключился»).
 // Временные статусы его перекрывают, но при очистке оно возвращается.
@@ -177,9 +178,57 @@ function removeGuestRequest(guestId) {
   }
 }
 
+function addDisconnectChoice(message) {
+  if (pendingDisconnectChoices.has(message.playerId)) return;
+
+  const card = document.createElement("div");
+  card.className = "guestRequestCard";
+
+  const title = document.createElement("div");
+  title.textContent = t("disconnectChoiceTitle")
+    .replace("{player}", message.playerId);
+  card.appendChild(title);
+
+  const row = document.createElement("div");
+  row.className = "guestRequestRow";
+
+  const choices = [
+    ["bot", "disconnectBot"],
+    ["passive", "disconnectPassive"],
+    ["eliminate", "disconnectEliminate"]
+  ];
+
+  for (const [kind, labelKey] of choices) {
+    const button = document.createElement("button");
+    button.textContent = t(labelKey);
+    button.addEventListener("click", () => {
+      const sent = sendMessage({
+        type: "resolveDisconnected",
+        playerId: message.playerId,
+        kind
+      });
+      if (sent) removeDisconnectChoice(message.playerId);
+    });
+    row.appendChild(button);
+  }
+
+  card.appendChild(row);
+  guestRequests.appendChild(card);
+  pendingDisconnectChoices.set(message.playerId, card);
+}
+
+function removeDisconnectChoice(playerId) {
+  const card = pendingDisconnectChoices.get(playerId);
+  if (card) {
+    card.remove();
+    pendingDisconnectChoices.delete(playerId);
+  }
+}
+
 function clearGuestRequests() {
   guestRequests.innerHTML = "";
   pendingGuestRequests.clear();
+  pendingDisconnectChoices.clear();
 }
 
 // --- Обновление интерфейса ---
@@ -571,6 +620,9 @@ function handleConnectionLost() {
     return;
   }
 
+  upsertResumeCard(getRoomCode(), getMyPlayerId(), "active", {
+    expiresAt: Date.now() + 60000
+  });
   showGameOver(t("connectionLost"));
 }
 
@@ -1216,6 +1268,26 @@ playAgainButton.addEventListener("click", () => {
   location.reload();
 });
 
+window.addEventListener("pagehide", () => {
+  if (state.map && !state.gameOver && getRoomCode() && getMyPlayerId()) {
+    upsertResumeCard(getRoomCode(), getMyPlayerId(), "active", {
+      expiresAt: Date.now() + 60000
+    });
+  }
+});
+
+// Если вкладка закрылась аварийно без pagehide, срок считается от последнего heartbeat.
+setInterval(() => {
+  if (
+    state.map && !state.gameOver && isNetworkConnected() &&
+    getRoomCode() && getMyPlayerId()
+  ) {
+    upsertResumeCard(getRoomCode(), getMyPlayerId(), "active", {
+      expiresAt: Date.now() + 60000
+    });
+  }
+}, 5000);
+
 // --- Ресайз окна / ориентации ---
 
 // Обычный ресайз: пересчёт границ без сброса позиции камеры
@@ -1270,11 +1342,26 @@ onNetworkMessage((message) => {
       setNetStatus(t("opponentDisconnected"));
     }
   } else if (message.type === "opponentReconnected") {
+    removeDisconnectChoice(message.playerId);
     if (message.playerId === 1) {
       setStickyStatus("");
     }
     setNetStatus("");
+  } else if (message.type === "disconnectChoice") {
+    addDisconnectChoice(message);
+  } else if (message.type === "playerReplaced") {
+    removeDisconnectChoice(message.playerId);
+    if (Array.isArray(message.seats)) {
+      state.seatKinds = {};
+      for (const seat of message.seats) {
+        state.seatKinds[seat.id] = seat.kind || "human";
+      }
+    }
+    if (message.playerId === 1) setStickyStatus("");
+    setNetStatus(t("playerReplacedNotice"));
+    refreshGame();
   } else if (message.type === "playerEliminated") {
+    removeDisconnectChoice(message.playerId);
     pendingEliminations.delete(message.playerId);
     eliminatePlayer(message.playerId, message.nextTurn);
     delete state.seatKinds[message.playerId];
@@ -1403,7 +1490,7 @@ initLobby({
 
       if (getMyPlayerId()) {
         saveGameSession(getRoomCode(), getMyPlayerId());
-        upsertResumeCard(getRoomCode(), getMyPlayerId(), "active");
+        upsertResumeCard(getRoomCode(), getMyPlayerId(), "active", { expiresAt: null });
       }
       applyLanguage();
       return;
@@ -1427,7 +1514,7 @@ initLobby({
 
     if (getMyPlayerId()) {
       saveGameSession(getRoomCode(), getMyPlayerId());
-      upsertResumeCard(getRoomCode(), getMyPlayerId(), "active");
+      upsertResumeCard(getRoomCode(), getMyPlayerId(), "active", { expiresAt: null });
     }
 
     if (isMyTurn()) {
