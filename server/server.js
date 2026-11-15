@@ -721,7 +721,8 @@ wss.on("connection", (ws) => {
 
       if (rooms.has(code)) {
         const existing = rooms.get(code);
-        const slot = existing.players.find(p => p.id === 1);
+        const finished = existing.mirror && existing.mirror.gameOver;
+        const slot = finished ? null : existing.players.find(p => p.id === 1);
 
         // Даже в игре только с ботами сначала возвращаем хоста в живую комнату,
         // а не заменяем её более старым сохранением.
@@ -745,7 +746,7 @@ wss.on("connection", (ws) => {
         }
 
         const statefulConnected = existing.players.some(p => !p.disconnected && p.hasState);
-        if (!statefulConnected) {
+        if (finished || !statefulConnected) {
           clearTimeout(existing.autoTimer);
           for (const p of existing.players) clearTimeout(p.disconnectTimer);
           for (const guest of existing.guests || []) sendTo(guest.ws, { type: "roomClosed", code: "hostLeft" });
@@ -807,13 +808,18 @@ wss.on("connection", (ws) => {
       const room = code ? rooms.get(code) : null;
       if (!room) {
         const { save } = readSave(code || "");
-        sendTo(ws, { type: "error", code: save ? "resumeNotOpened" : "roomNotFound" });
+        sendTo(ws, { type: "error", code: save ? "resumeNotOpened" : "roomNotFound", roomCode: code });
         return;
       }
 
       const name = String(message.name || "Игрок").slice(0, 24);
 
       if (room.phase === "game") {
+        if (room.mirror && room.mirror.gameOver) {
+          sendTo(ws, { type: "gameGone", roomCode: code });
+          return;
+        }
+
         const wanted = message.preferredSeat;
         const seat = (room.seats || []).find(s => s.id === wanted);
 
@@ -1211,7 +1217,13 @@ wss.on("connection", (ws) => {
     // ---------- Rejoin ----------
     if (message.type === "rejoinRoom") {
       const room = rooms.get(message.roomCode);
-      if (!room || room.phase !== "game") { sendTo(ws, { type: "gameGone", roomCode: message.roomCode }); return; }
+      if (
+        !room || room.phase !== "game" ||
+        (room.mirror && room.mirror.gameOver)
+      ) {
+        sendTo(ws, { type: "gameGone", roomCode: message.roomCode });
+        return;
+      }
 
       if (message.build !== BUILD) {
         sendTo(ws, { type: "error", code: "clientOutdated" });
