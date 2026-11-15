@@ -81,6 +81,15 @@ function readResumeCards() {
     if (key !== normalizedKey || card.type !== type) migrated = true;
   }
 
+  // Сохранение заменяет карточку текущей игры: обе ведут в одну комнату,
+  // но сохранение умеет также восстановить её после остановки сервера.
+  for (const card of Object.values(cards)) {
+    if (card.type === "saved" && cards[`active:${card.code}`]) {
+      delete cards[`active:${card.code}`];
+      migrated = true;
+    }
+  }
+
   if (migrated) {
     try { localStorage.setItem(RESUME_KEY, JSON.stringify(cards)); } catch {}
   }
@@ -504,6 +513,12 @@ function handleMessage(message) {
   }
 
   if (message.type === "error") {
+    if (
+      (message.code === "roomNotFound" || message.code === "resumeNotOpened") &&
+      message.roomCode
+    ) {
+      removeResumeCard(message.roomCode, "active");
+    }
     const text = t(message.code) || message.code;
     const menuVisible = !el("menuScreen").classList.contains("hidden");
     if (menuVisible) el("menuStatus").textContent = text;
