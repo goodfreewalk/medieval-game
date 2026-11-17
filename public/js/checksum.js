@@ -49,11 +49,18 @@ export function computeChecksum(st) {
     .sort((a, b) => a - b)
     .join(",");
 
+  const teamsStr = Object.keys(st.teams || {})
+    .map(Number)
+    .sort((a, b) => a - b)
+    .map(id => `${id}:${st.teams[id]}`)
+    .join("|");
+
   const payload = [
     units,
     ownersStr,
     playersStr,
     eliminatedStr,
+    teamsStr,
     st.currentPlayer,
     st.gameOver ? 1 : 0,
     st.winner === null || st.winner === undefined ? "-" : st.winner

@@ -13,7 +13,8 @@ import {
   getTileOwner,
   getPlayerGold,
   getSupplyUsed,
-  getSupplyCapacity
+  getSupplyCapacity,
+  areAllies
 } from "../public/js/state.js";
 import { TERRAIN, TERRAIN_DEFENSE } from "../public/js/terrain.js";
 
@@ -68,7 +69,7 @@ function computeDefense(state, me) {
   const threatened = [];
 
   for (const u of state.units) {
-    if (u.owner === me) continue;
+    if (areAllies(u.owner, me)) continue;
     const d = Math.abs(u.x - castle.x) + Math.abs(u.y - castle.y);
     if (d <= THREAT_RADIUS) {
       enemyForce += UNIT_TYPES[u.type].attack + (u.hp / 20);
@@ -211,7 +212,7 @@ function collectTargets(state, me, personality, defense, relations) {
           x, y,
           weight: personality === "balanced" ? 3 : 1.5
         });
-      } else if (owner !== me) {
+      } else if (!areAllies(owner, me)) {
         // вражеские здания: вес зависит от отношения к владельцу
         const rel = defense.active ? 0 : (relations?.[owner] ?? 0);
         targets.push({
@@ -225,7 +226,7 @@ function collectTargets(state, me, personality, defense, relations) {
 
   if (!defense.active) {
     for (const unit of state.units) {
-      if (unit.owner === me) continue;
+      if (areAllies(unit.owner, me)) continue;
       const rel = relations?.[unit.owner] ?? 0;
       targets.push({
         x: unit.x, y: unit.y,
@@ -281,7 +282,7 @@ function planMove(state, personality, ctx, defense) {
       const owner = getTileOwner(tile.x, tile.y);
       let captureBonus = 0;
       if (
-        owner !== me &&
+        !areAllies(owner, me) &&
         (terrain === TERRAIN.CASTLE || terrain === TERRAIN.VILLAGE)
       ) {
         captureBonus = terrain === TERRAIN.CASTLE ? 7 : 4;
@@ -290,7 +291,7 @@ function planMove(state, personality, ctx, defense) {
       let attackBonus = 0;
       let danger = 0;
       for (const enemy of state.units) {
-        if (enemy.owner === me) continue;
+        if (areAllies(enemy.owner, me)) continue;
         const rel = ctx.relations?.[enemy.owner] ?? 0;
         const distance = getDistance(movedUnit, enemy);
 
