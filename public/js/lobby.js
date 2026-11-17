@@ -2,6 +2,7 @@ import { onNetworkMessage, sendMessage, saveGameSession } from "./network.js";
 import { t } from "./i18n.js";
 import { MAPS, getMapById } from "./maps.js";
 import { BUILD } from "./build.js";
+import { COLOR_CHOICES, getPlayerColor, getPlayerColorId } from "./units.js";
 
 // ---------- Локальное состояние лобби ----------
 
@@ -258,9 +259,50 @@ function appendTeamControl(li, seatId, update) {
     li.appendChild(select);
   } else {
     const span = document.createElement("span");
-    span.textContent = ` · ${t("teamLabel")} ${team}`;
+    span.className = "teamValue";
+    span.textContent = `${t("teamLabel")} ${team}`;
     li.appendChild(span);
   }
+}
+
+function paintColorControl(control, seatId, colorId) {
+  control.style.backgroundColor = getPlayerColor(seatId, { [seatId]: colorId });
+  control.style.color = colorId === "yellow" || colorId === "orange"
+    ? "#20242d"
+    : "#ffffff";
+}
+
+function appendColorControl(li, seatId, update, editable) {
+  const colorId = getPlayerColorId(seatId, update.colors || {});
+
+  if (!editable) {
+    const swatch = document.createElement("span");
+    swatch.className = "playerColorSwatch";
+    swatch.title = t(COLOR_CHOICES.find(color => color.id === colorId)?.nameKey);
+    swatch.setAttribute("aria-label", `${t("colorLabel")}: ${swatch.title}`);
+    paintColorControl(swatch, seatId, colorId);
+    li.appendChild(swatch);
+    return;
+  }
+
+  const select = document.createElement("select");
+  select.className = "playerColorSelect";
+  select.setAttribute("aria-label", t("colorLabel"));
+
+  for (const color of COLOR_CHOICES) {
+    const option = document.createElement("option");
+    option.value = color.id;
+    option.textContent = t(color.nameKey);
+    select.appendChild(option);
+  }
+
+  select.value = colorId;
+  paintColorControl(select, seatId, colorId);
+  select.addEventListener("change", () => {
+    paintColorControl(select, seatId, select.value);
+    sendMessage({ type: "setLobbyColor", seatId, color: select.value });
+  });
+  li.appendChild(select);
 }
 
 function renderLobby() {
@@ -340,6 +382,10 @@ function renderLobby() {
       }
 
       appendTeamControl(li, seatId, update);
+      if (human || bot) {
+        const editable = human ? human.id === myPlayerId : isHost;
+        appendColorControl(li, seatId, update, editable);
+      }
       list.appendChild(li);
     }
 
@@ -436,6 +482,9 @@ function renderSeatDraft(update) {
       const span = document.createElement("span");
       span.textContent = kindText;
       li.appendChild(span);
+      if (d.kind !== "eliminate") {
+        appendColorControl(li, seatId, update, seatId === myPlayerId);
+      }
       list.appendChild(li);
       continue;
     }
@@ -478,6 +527,9 @@ function renderSeatDraft(update) {
     });
 
     li.appendChild(select);
+    if (d.kind !== "eliminate") {
+      appendColorControl(li, seatId, update, d.kind === "bot");
+    }
     list.appendChild(li);
   }
 }

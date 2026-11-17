@@ -8,6 +8,7 @@ import { WebSocketServer } from "ws";
 import { state, initGame, areAllies } from "../public/js/state.js";
 import { TERRAIN } from "../public/js/terrain.js";
 import { getMapById } from "../public/js/maps.js";
+import { COLOR_CHOICES, DEFAULT_PLAYER_COLOR_IDS } from "../public/js/units.js";
 import { BUILD } from "../public/js/build.js";
 import { computeChecksum } from "../public/js/checksum.js";
 import {
@@ -143,6 +144,7 @@ function loadMirror(room) {
   state.owners = new Map(m.owners);
   state.players = m.players;
   state.teams = m.teams || {};
+  state.playerColors = m.playerColors || {};
   state.currentPlayer = m.currentPlayer;
   state.eliminated = new Set(m.eliminated);
   state.seatKinds = m.seatKinds;
@@ -157,6 +159,7 @@ function saveMirror(room) {
     owners: Array.from(state.owners.entries()),
     players: state.players,
     teams: state.teams,
+    playerColors: state.playerColors,
     currentPlayer: state.currentPlayer,
     eliminated: Array.from(state.eliminated),
     seatKinds: state.seatKinds,
@@ -309,7 +312,7 @@ function applyActionWithRelations(room, action, meId) {
   if (action.kind === "move") result = applyMove(action.unitId, action.x, action.y);
   else if (action.kind === "attack") result = applyAttack(action.attackerId, action.targetId);
   else if (action.kind === "recruit") result = applyRecruit(action.type, action.x, action.y);
-  else if (action.kind === "sendGold") result = applySendGold(action.targetPlayer, action.x, action.y);
+  else if (action.kind === "sendGold") result = applySendGold(action.targetPlayer, action.x, action.y, action.amount);
   else if (action.kind === "endTurn") {
     applyEndTurn();
     result = { success: true };
@@ -436,7 +439,19 @@ function releaseGuestSeat(room, guestId) {
   }
 }
 
+function lobbyColor(room, seatId) {
+  const selected = room.lobbyColors?.[seatId];
+  return COLOR_CHOICES.some(color => color.id === selected)
+    ? selected
+    : DEFAULT_PLAYER_COLOR_IDS[seatId] || "blue";
+}
+
 function sendRoomUpdate(room) {
+  const colors = {};
+  for (let seatId = 1; seatId <= mapMaxSeats(room); seatId++) {
+    colors[seatId] = lobbyColor(room, seatId);
+  }
+
   broadcastToRoom(room, {
     type: "roomUpdate",
     mapId: room.mapId,
@@ -444,6 +459,7 @@ function sendRoomUpdate(room) {
     seatDraft: room.seatDraft || null,
     bots: room.lobbyBots || null,
     teams: room.lobbyTeams || {},
+    colors,
     spectators: (room.spectators || []).map(s => ({ id: s.id, name: s.name })),
     saveInfo: room.saveData
       ? { seats: room.saveData.players, turn: room.saveData.turn }
@@ -521,6 +537,11 @@ function armTurnDriver(room) {
     room.turnRemaining = null;
     room.botSteps = 0;
     room.botTargetUsage = new Map();
+    if (!room.botMemories) room.botMemories = {};
+    if (!room.botMemories[room.turn]) {
+      room.botMemories[room.turn] = { assignments: {}, previous: {} };
+    }
+    room.botMemories[room.turn].aidGiven = false;
     room.autoTimer = setTimeout(() => botStep(room), BOT_FIRST_STEP_MS);
   }
 }
@@ -549,6 +570,7 @@ function botStep(room) {
       me,
       relations: (room.relations && room.relations[me]) || {},
       usage: room.botTargetUsage || new Map(),
+      memory: room.botMemories?.[me],
       defense: false
     };
 
@@ -818,6 +840,7 @@ wss.on("connection", (ws) => {
         spectators: [],
         lobbyBots: [],
         lobbyTeams: {},
+        lobbyColors: {},
         eliminatedSeats: new Set(),
         phase: "lobby",
         resumeLobby: false,
@@ -887,6 +910,25 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (message.type === "setLobbyColor") {
+      const room = getRoom(ws);
+      if (!room || room.phase !== "lobby") return;
+      const seatId = message.seatId;
+      if (!Number.isInteger(seatId) || seatId < 1 || seatId > mapMaxSeats(room)) return;
+      if (!COLOR_CHOICES.some(color => color.id === message.color)) return;
+
+      const ownHumanSeat = seatId === ws.playerId &&
+        room.players.some(player => player.id === seatId);
+      const hostBotSeat = ws.playerId === 1 && (room.resumeLobby
+        ? room.seatDraft?.[seatId]?.kind === "bot"
+        : room.lobbyBots.some(bot => bot.id === seatId));
+      if (!ownHumanSeat && !hostBotSeat) return;
+
+      room.lobbyColors[seatId] = message.color;
+      sendRoomUpdate(room);
+      return;
+    }
+
     // ---------- Сохранение партии ----------
     if (message.type === "saveGame") {
       const room = getRoom(ws);
@@ -905,6 +947,7 @@ wss.on("connection", (ws) => {
             kind: s.kind,
             personality: s.personality || null,
             team: s.team || s.id,
+            color: s.color || room.mirror?.playerColors?.[s.id] || null,
             name: human ? human.name : null
           };
         }),
@@ -967,6 +1010,9 @@ wss.on("connection", (ws) => {
         spectators: [],
         lobbyBots: [],
         lobbyTeams: {},
+        lobbyColors: Object.fromEntries(
+          save.players.map(seat => [seat.id, seat.color || save.state.playerColors?.[seat.id] || null])
+        ),
         eliminatedSeats: new Set(),
         phase: "lobby",
         resumeLobby: true,
@@ -1200,13 +1246,15 @@ wss.on("connection", (ws) => {
         ...room.players.map(p => ({
           id: p.id,
           kind: "human",
-          team: room.lobbyTeams[p.id] || p.id
+          team: room.lobbyTeams[p.id] || p.id,
+          color: lobbyColor(room, p.id)
         })),
         ...room.lobbyBots.map(b => ({
           id: b.id,
           kind: "bot",
           personality: b.personality,
-          team: room.lobbyTeams[b.id] || b.id
+          team: room.lobbyTeams[b.id] || b.id,
+          color: lobbyColor(room, b.id)
         }))
       ];
 
@@ -1230,7 +1278,8 @@ wss.on("connection", (ws) => {
       room.seats = seats;
 
       const teams = Object.fromEntries(seats.map(seat => [seat.id, seat.team]));
-      initGame(null, null, { mapId: room.mapId, seats: seats.map(s => s.id), teams });
+      const colors = Object.fromEntries(seats.map(seat => [seat.id, seat.color]));
+      initGame(null, null, { mapId: room.mapId, seats: seats.map(s => s.id), teams, colors });
       state.seatKinds = {};
       for (const seat of seats) state.seatKinds[seat.id] = seat.kind;
       saveMirror(room);
@@ -1275,6 +1324,7 @@ wss.on("connection", (ws) => {
           kind: draft.kind,
           personality: draft.personality || null,
           team: savedSeat?.team || room.saveData.state.teams?.[seatId] || seatId,
+          color: lobbyColor(room, seatId),
           substitute: false
         });
         if (draft.kind === "human") {
@@ -1324,6 +1374,7 @@ wss.on("connection", (ws) => {
       room.mirror = room.saveData.state;
       loadMirror(room);
       state.teams = Object.fromEntries(seats.map(seat => [seat.id, seat.team]));
+      state.playerColors = Object.fromEntries(seats.map(seat => [seat.id, seat.color]));
       for (const id of eliminated) eliminatePlayer(id, id === state.currentPlayer ? turn : null);
       state.seatKinds = {};
       for (const seat of seats) state.seatKinds[seat.id] = seat.kind;
