@@ -1,12 +1,42 @@
 import { TERRAIN_COST } from "./terrain.js";
 
-// Цвета игроков (1-4): для партий на 2, 3 и 4 игрока
+export const COLOR_CHOICES = [
+  { id: "red", value: "#e5484d", nameKey: "colorRed" },
+  { id: "orange", value: "#e08a1e", nameKey: "colorOrange" },
+  { id: "yellow", value: "#e6c229", nameKey: "colorYellow" },
+  { id: "green", value: "#3dbb4a", nameKey: "colorGreen" },
+  { id: "blue", value: "#2f7ef7", nameKey: "colorBlue" },
+  { id: "purple", value: "#8b5cf6", nameKey: "colorPurple" },
+  { id: "black", value: "#20242d", nameKey: "colorBlack" }
+];
+
+export const DEFAULT_PLAYER_COLOR_IDS = {
+  1: "blue",
+  2: "red",
+  3: "green",
+  4: "orange"
+};
+
+// Стандартные цвета мест используются и для старых сохранений.
 export const PLAYER_COLORS = {
   1: "#2f7ef7",
   2: "#e5484d",
   3: "#3dbb4a",
   4: "#e08a1e"
 };
+
+export function getPlayerColorId(owner, colors = {}) {
+  const selected = colors?.[owner];
+  return COLOR_CHOICES.some(color => color.id === selected)
+    ? selected
+    : DEFAULT_PLAYER_COLOR_IDS[owner] || "blue";
+}
+
+export function getPlayerColor(owner, colors = {}) {
+  const id = getPlayerColorId(owner, colors);
+  return COLOR_CHOICES.find(color => color.id === id)?.value ||
+    PLAYER_COLORS[owner] || "#2f7ef7";
+}
 
 export const UNIT_TYPES = {
   militia: {

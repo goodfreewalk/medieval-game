@@ -1,6 +1,6 @@
 import { state, getTileOwner } from "./state.js";
 import { TERRAIN } from "./terrain.js";
-import { PLAYER_COLORS } from "./units.js";
+import { getPlayerColor } from "./units.js";
 
 // ---------- Спрайты (эмодзи) ----------
 
@@ -232,7 +232,7 @@ function drawFrame() {
       const px = x * T;
       const py = y * T;
 
-      ctx.strokeStyle = PLAYER_COLORS[owner];
+      ctx.strokeStyle = getPlayerColor(owner, state.playerColors);
       ctx.lineWidth = T * 0.06;
       ctx.strokeRect(
         px + ctx.lineWidth / 2,
@@ -249,7 +249,7 @@ function drawFrame() {
       ctx.fillStyle = "#3a2b1a";
       ctx.fillRect(fx, fy, poleW, T * 0.36);
 
-      ctx.fillStyle = PLAYER_COLORS[owner];
+      ctx.fillStyle = getPlayerColor(owner, state.playerColors);
       ctx.fillRect(fx + poleW, fy, T * 0.26, T * 0.17);
 
       ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
@@ -283,7 +283,7 @@ function drawFrame() {
 
     ctx.beginPath();
     ctx.arc(cx, cy, T * 0.30, 0, Math.PI * 2);
-    ctx.fillStyle = PLAYER_COLORS[unit.owner];
+    ctx.fillStyle = getPlayerColor(unit.owner, state.playerColors);
     ctx.fill();
 
     if (unit === state.selectedUnit) {

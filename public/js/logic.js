@@ -362,23 +362,24 @@ export function applyRecruit(type, x, y) {
   return { success: true };
 }
 
-export function applySendGold(targetPlayer, x, y) {
+export function applySendGold(targetPlayer, x, y, amount = 10) {
   const sender = state.currentPlayer;
   const terrain = getTerrainAt(x, y);
 
   if (
+    (amount !== 10 && amount !== 20) ||
     sender === targetPlayer ||
     !areAllies(sender, targetPlayer) ||
     (terrain !== TERRAIN.CASTLE && terrain !== TERRAIN.VILLAGE) ||
     getTileOwner(x, y) !== targetPlayer ||
     !state.players[targetPlayer] ||
-    getPlayerGold(sender) < 10
+    getPlayerGold(sender) < amount
   ) {
     return { success: false };
   }
 
-  state.players[sender].gold -= 10;
-  state.players[targetPlayer].gold += 10;
+  state.players[sender].gold -= amount;
+  state.players[targetPlayer].gold += amount;
   return { success: true };
 }
 

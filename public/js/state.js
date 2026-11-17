@@ -33,6 +33,7 @@ export const state = {
   owners: new Map(),
   players: {},
   teams: {},
+  playerColors: {},
 
   // Реестр устранённых мест (не участвуют в очерёдности и победе)
   eliminated: new Set(),
@@ -59,7 +60,7 @@ export function areAllies(a, b) {
   return (state.teams[a] || a) === (state.teams[b] || b);
 }
 
-// options: { mapId, seats, teams } — seats = массив id игроков
+// options: { mapId, seats, teams, colors } — seats = массив id игроков
 export function initGame(canvas, ctx, options = {}) {
   const mapDef = getMapById(options.mapId);
   const parsed = parseMap(mapDef);
@@ -93,10 +94,12 @@ export function initGame(canvas, ctx, options = {}) {
   // Игроки и экономика
   state.players = {};
   state.teams = {};
+  state.playerColors = {};
 
   for (const id of seats) {
     state.players[id] = { gold: 40 };
     state.teams[id] = options.teams?.[id] || id;
+    state.playerColors[id] = options.colors?.[id] || null;
   }
 
   state.units = createInitialUnits(parsed.starts, seats, parsed.terrain);
@@ -248,6 +251,7 @@ export function resetState() {
   state.units = [];
   state.players = {};
   state.teams = {};
+  state.playerColors = {};
   state.owners = new Map();
   state.eliminated = new Set();
   state.seatKinds = {};

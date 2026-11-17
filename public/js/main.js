@@ -408,20 +408,28 @@ function updateRecruitPanel() {
   recruitPanel.appendChild(header);
 
   if (allyHelp) {
-    const button = document.createElement("button");
-    button.className = "recruitButton";
-    button.textContent = t("sendGold");
-    button.disabled = getPlayerGold(me) < 10;
-    button.addEventListener("click", () => {
-      const action = {
-        kind: "sendGold",
-        targetPlayer: owner,
-        x: tile.x,
-        y: tile.y
-      };
-      if (runAction(action)) sendAction(action);
-    });
-    recruitPanel.appendChild(button);
+    const row = document.createElement("div");
+    row.className = "goldHelpRow";
+
+    for (const amount of [10, 20]) {
+      const button = document.createElement("button");
+      button.className = "recruitButton";
+      button.textContent = t("sendGold").replace("{amount}", amount);
+      button.disabled = getPlayerGold(me) < amount;
+      button.addEventListener("click", () => {
+        const action = {
+          kind: "sendGold",
+          targetPlayer: owner,
+          x: tile.x,
+          y: tile.y,
+          amount
+        };
+        if (runAction(action)) sendAction(action);
+      });
+      row.appendChild(button);
+    }
+
+    recruitPanel.appendChild(row);
     return;
   }
 
@@ -666,6 +674,7 @@ function serializeState() {
     owners: Array.from(state.owners.entries()),
     players: state.players,
     teams: state.teams,
+    playerColors: state.playerColors,
     currentPlayer: state.currentPlayer,
     gameOver: state.gameOver,
     winner: state.winner,
@@ -681,6 +690,7 @@ function applyFullState(snapshot) {
   state.owners = new Map(snapshot.owners);
   state.players = snapshot.players;
   state.teams = snapshot.teams || {};
+  state.playerColors = snapshot.playerColors || {};
   state.currentPlayer = snapshot.currentPlayer;
   state.gameOver = snapshot.gameOver;
   state.winner = snapshot.winner;
@@ -762,7 +772,7 @@ function runAction(action) {
   }
 
   if (action.kind === "sendGold") {
-    const result = applySendGold(action.targetPlayer, action.x, action.y);
+    const result = applySendGold(action.targetPlayer, action.x, action.y, action.amount);
     if (result.success) refreshGame();
     return result.success;
   }
@@ -1452,16 +1462,19 @@ initLobby({
     const seatIds = [];
     const seatKinds = {};
     const teams = {};
+    const colors = {};
 
     for (const seat of message.seats || []) {
       if (seat && typeof seat === "object") {
         seatIds.push(seat.id);
         seatKinds[seat.id] = seat.kind || "human";
         teams[seat.id] = seat.team || seat.id;
+        colors[seat.id] = seat.color || null;
       } else {
         seatIds.push(seat);
         seatKinds[seat] = "human";
         teams[seat] = seat;
+        colors[seat] = null;
       }
     }
 
@@ -1491,7 +1504,8 @@ initLobby({
     initGame(canvas, ctx, {
       mapId: message.mapId,
       seats: seatIds,
-      teams
+      teams,
+      colors
     });
 
     initCamera();
