@@ -32,6 +32,7 @@ export const state = {
   attackableTiles: new Map(),
   owners: new Map(),
   players: {},
+  teams: {},
 
   // Реестр устранённых мест (не участвуют в очерёдности и победе)
   eliminated: new Set(),
@@ -52,7 +53,13 @@ export function setTileOwner(x, y, owner) {
   state.owners.set(tileKey(x, y), owner);
 }
 
-// options: { mapId, seats } — seats = массив id игроков (например [1,2] или [1,2,3,4])
+export function areAllies(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return (state.teams[a] || a) === (state.teams[b] || b);
+}
+
+// options: { mapId, seats, teams } — seats = массив id игроков
 export function initGame(canvas, ctx, options = {}) {
   const mapDef = getMapById(options.mapId);
   const parsed = parseMap(mapDef);
@@ -85,9 +92,11 @@ export function initGame(canvas, ctx, options = {}) {
 
   // Игроки и экономика
   state.players = {};
+  state.teams = {};
 
   for (const id of seats) {
     state.players[id] = { gold: 40 };
+    state.teams[id] = options.teams?.[id] || id;
   }
 
   state.units = createInitialUnits(parsed.starts, seats, parsed.terrain);
@@ -130,7 +139,7 @@ export function captureTile(unit) {
 
   const currentOwner = getTileOwner(unit.x, unit.y);
 
-  if (currentOwner === unit.owner) {
+  if (areAllies(currentOwner, unit.owner)) {
     return false;
   }
 
@@ -185,7 +194,7 @@ export function getSupplyUsed(owner) {
   return state.units.filter(unit => unit.owner === owner).length;
 }
 
-// Регенерация в начале своего хода на СОБСТВЕННЫХ зданиях:
+// Регенерация в начале своего хода на зданиях своей команды:
 //   спокойно:  замок +10, деревня +5
 //   под осаде: замок +5,  деревня +2  (юнит терял HP с прошлого своего хода)
 const REGEN_CASTLE = 10;
@@ -209,7 +218,7 @@ function applyRegeneration(owner) {
       continue;
     }
 
-    if (getTileOwner(unit.x, unit.y) !== owner) {
+    if (!areAllies(getTileOwner(unit.x, unit.y), owner)) {
       continue;
     }
 
@@ -238,6 +247,7 @@ export function resetState() {
   state.map = null;
   state.units = [];
   state.players = {};
+  state.teams = {};
   state.owners = new Map();
   state.eliminated = new Set();
   state.seatKinds = {};

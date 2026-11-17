@@ -6,7 +6,8 @@ import {
   getIncome,
   getSupplyCapacity,
   getSupplyUsed,
-  getTileOwner
+  getTileOwner,
+  areAllies
 } from "./state.js";
 import {
   getLanguage,
@@ -44,6 +45,7 @@ import {
   applyMove,
   applyAttack,
   applyRecruit,
+  applySendGold,
   applyEndTurn,
   eliminatePlayer
 } from "./logic.js";
@@ -72,7 +74,6 @@ const guestRequests = document.getElementById("guestRequests");
 const gameContainer = document.getElementById("gameContainer");
 
 const pendingGuestRequests = new Map();
-const pendingDisconnectChoices = new Map();
 
 // «Липкий» статус: важное постоянное сообщение (например, «хост отключился»).
 // Временные статусы его перекрывают, но при очистке оно возвращается.
@@ -90,6 +91,34 @@ function setStickyStatus(text) {
   if (netStatus) {
     netStatus.textContent = text;
   }
+}
+
+let disconnectWaitTimer = null;
+let disconnectWaitPlayer = null;
+let disconnectWaitUntil = 0;
+
+function updateDisconnectWait() {
+  const seconds = Math.max(0, Math.ceil((disconnectWaitUntil - Date.now()) / 1000));
+  setStickyStatus(t("disconnectWaiting")
+    .replace("{player}", disconnectWaitPlayer)
+    .replace("{seconds}", seconds));
+}
+
+function startDisconnectWait(playerId, waitUntil) {
+  clearDisconnectWait();
+  disconnectWaitPlayer = playerId;
+  disconnectWaitUntil = waitUntil || Date.now() + 60000;
+  updateDisconnectWait();
+  disconnectWaitTimer = setInterval(updateDisconnectWait, 1000);
+}
+
+function clearDisconnectWait(playerId = null) {
+  if (playerId !== null && disconnectWaitPlayer !== playerId) return;
+  clearInterval(disconnectWaitTimer);
+  disconnectWaitTimer = null;
+  disconnectWaitPlayer = null;
+  disconnectWaitUntil = 0;
+  setStickyStatus("");
 }
 
 // --- Таймер хода ---
@@ -178,57 +207,9 @@ function removeGuestRequest(guestId) {
   }
 }
 
-function addDisconnectChoice(message) {
-  if (pendingDisconnectChoices.has(message.playerId)) return;
-
-  const card = document.createElement("div");
-  card.className = "guestRequestCard";
-
-  const title = document.createElement("div");
-  title.textContent = t("disconnectChoiceTitle")
-    .replace("{player}", message.playerId);
-  card.appendChild(title);
-
-  const row = document.createElement("div");
-  row.className = "guestRequestRow";
-
-  const choices = [
-    ["bot", "disconnectBot"],
-    ["passive", "disconnectPassive"],
-    ["eliminate", "disconnectEliminate"]
-  ];
-
-  for (const [kind, labelKey] of choices) {
-    const button = document.createElement("button");
-    button.textContent = t(labelKey);
-    button.addEventListener("click", () => {
-      const sent = sendMessage({
-        type: "resolveDisconnected",
-        playerId: message.playerId,
-        kind
-      });
-      if (sent) removeDisconnectChoice(message.playerId);
-    });
-    row.appendChild(button);
-  }
-
-  card.appendChild(row);
-  guestRequests.appendChild(card);
-  pendingDisconnectChoices.set(message.playerId, card);
-}
-
-function removeDisconnectChoice(playerId) {
-  const card = pendingDisconnectChoices.get(playerId);
-  if (card) {
-    card.remove();
-    pendingDisconnectChoices.delete(playerId);
-  }
-}
-
 function clearGuestRequests() {
   guestRequests.innerHTML = "";
   pendingGuestRequests.clear();
-  pendingDisconnectChoices.clear();
 }
 
 // --- Обновление интерфейса ---
@@ -263,10 +244,10 @@ function stopTurnTimer() {
   }
 }
 
-function startTurnTimer() {
+function startTurnTimer(remaining = TURN_TIME) {
   stopTurnTimer();
 
-  timeLeft = TURN_TIME;
+  timeLeft = Number.isFinite(remaining) ? remaining : TURN_TIME;
   updateTimerDisplay();
 
   timerInterval = setInterval(() => {
@@ -390,21 +371,20 @@ function closeRecruitPanel() {
   drawGame();
 }
 
-// Окно найма: полупрозрачное окно поверх карты с крестиком
+// Окно найма или помощи: полупрозрачное окно поверх карты с крестиком
 function updateRecruitPanel() {
   recruitPanel.innerHTML = "";
 
   const tile = state.selectedTile;
-
-  const show =
-    tile &&
-    state.map &&
-    !state.gameOver &&
+  const me = getMyPlayerId();
+  const isBuilding = tile && state.map &&
     (state.map[tile.y][tile.x] === TERRAIN.CASTLE ||
-      state.map[tile.y][tile.x] === TERRAIN.VILLAGE) &&
-    getTileOwner(tile.x, tile.y) === getMyPlayerId() &&
-    canPlayTurn() &&
-    !getUnitAtTile(state.units, tile.x, tile.y);
+      state.map[tile.y][tile.x] === TERRAIN.VILLAGE);
+  const owner = isBuilding ? getTileOwner(tile.x, tile.y) : 0;
+  const ownRecruit = owner === me && !getUnitAtTile(state.units, tile?.x, tile?.y);
+  const allyHelp = owner !== me && areAllies(owner, me);
+  const show = isBuilding && !state.gameOver && canPlayTurn() &&
+    (ownRecruit || allyHelp);
 
   recruitPanel.style.display = show ? "" : "none";
 
@@ -416,7 +396,7 @@ function updateRecruitPanel() {
   header.className = "recruitHeader";
 
   const title = document.createElement("span");
-  title.textContent = t("recruit");
+  title.textContent = t(allyHelp ? "sendGoldTitle" : "recruit");
 
   const close = document.createElement("button");
   close.className = "recruitClose";
@@ -426,6 +406,24 @@ function updateRecruitPanel() {
   header.appendChild(title);
   header.appendChild(close);
   recruitPanel.appendChild(header);
+
+  if (allyHelp) {
+    const button = document.createElement("button");
+    button.className = "recruitButton";
+    button.textContent = t("sendGold");
+    button.disabled = getPlayerGold(me) < 10;
+    button.addEventListener("click", () => {
+      const action = {
+        kind: "sendGold",
+        targetPlayer: owner,
+        x: tile.x,
+        y: tile.y
+      };
+      if (runAction(action)) sendAction(action);
+    });
+    recruitPanel.appendChild(button);
+    return;
+  }
 
   const terrain = state.map[tile.y][tile.x];
 
@@ -453,9 +451,8 @@ function updateRecruitPanel() {
     button.className = "recruitButton";
     button.textContent = `${icons[type]} ${unitName(type)} 💰 ${stats.cost}`;
 
-    const supplyFull =
-      getSupplyUsed(getMyPlayerId()) >= getSupplyCapacity(getMyPlayerId());
-    const noGold = getPlayerGold(getMyPlayerId()) < stats.cost;
+    const supplyFull = getSupplyUsed(me) >= getSupplyCapacity(me);
+    const noGold = getPlayerGold(me) < stats.cost;
 
     if (noGold || supplyFull) {
       button.disabled = true;
@@ -522,7 +519,8 @@ function refreshGame() {
   updateRecruitPanel();
 
   saveGameBtn.style.display =
-    getMyPlayerId() === 1 && state.map && !state.gameOver ? "" : "none";
+    getMyPlayerId() === 1 && state.seatKinds[1] === "human" &&
+    state.map && !state.gameOver ? "" : "none";
 
   if (state.map && !state.gameOver &&
       state.seatKinds[getMyPlayerId()] === "passive") {
@@ -555,18 +553,18 @@ function applyLanguage() {
   }
 }
 
-function showGameOver(reason) {
+function showGameOver(reason, keepActive = false) {
   stopTurnTimer();
   hideInfo();
   clearGuestRequests();
+  clearDisconnectWait();
 
-  // При потере соединения сессию НЕ чистим: после перезагрузки
-  // страницы игрок сможет вернуться в ещё живую комнату
+  // При потере соединения и переходе в наблюдатели карточка остаётся.
   if (reason !== t("connectionLost")) {
     clearGameSession();
   }
 
-  if (reason !== t("connectionLost") && getRoomCode()) {
+  if (reason !== t("connectionLost") && !keepActive && getRoomCode()) {
     removeResumeCard(getRoomCode(), "active");
   }
 
@@ -578,7 +576,7 @@ function showGameOver(reason) {
     gameOverReason.textContent = reason;
   } else if (state.winner === null) {
     gameOverReason.textContent = t("draw");
-  } else if (state.winner === getMyPlayerId()) {
+  } else if (areAllies(state.winner, getMyPlayerId())) {
     gameOverReason.textContent = t("victory");
   } else {
     gameOverReason.textContent = t("defeat");
@@ -620,9 +618,7 @@ function handleConnectionLost() {
     return;
   }
 
-  upsertResumeCard(getRoomCode(), getMyPlayerId(), "active", {
-    expiresAt: Date.now() + 60000
-  });
+  upsertResumeCard(getRoomCode(), getMyPlayerId(), "active");
   showGameOver(t("connectionLost"));
 }
 
@@ -649,12 +645,12 @@ function leaveGame() {
   leaveGameBtn.textContent = t("leaveGame");
 
   sendMessage({ type: "leaveRoom" });
-  if (getRoomCode()) removeResumeCard(getRoomCode(), "active");
 
   stopTurnTimer();
   hideInfo();
   clearGameSession();
   clearGuestRequests();
+  clearDisconnectWait();
   setStickyStatus("");
   setNetStatus("");
   resetState();
@@ -669,6 +665,7 @@ function serializeState() {
     units: state.units,
     owners: Array.from(state.owners.entries()),
     players: state.players,
+    teams: state.teams,
     currentPlayer: state.currentPlayer,
     gameOver: state.gameOver,
     winner: state.winner,
@@ -683,6 +680,7 @@ function applyFullState(snapshot) {
   state.units = snapshot.units;
   state.owners = new Map(snapshot.owners);
   state.players = snapshot.players;
+  state.teams = snapshot.teams || {};
   state.currentPlayer = snapshot.currentPlayer;
   state.gameOver = snapshot.gameOver;
   state.winner = snapshot.winner;
@@ -760,6 +758,12 @@ function runAction(action) {
       }
     }
 
+    return result.success;
+  }
+
+  if (action.kind === "sendGold") {
+    const result = applySendGold(action.targetPlayer, action.x, action.y);
+    if (result.success) refreshGame();
     return result.success;
   }
 
@@ -1270,23 +1274,9 @@ playAgainButton.addEventListener("click", () => {
 
 window.addEventListener("pagehide", () => {
   if (state.map && !state.gameOver && getRoomCode() && getMyPlayerId()) {
-    upsertResumeCard(getRoomCode(), getMyPlayerId(), "active", {
-      expiresAt: Date.now() + 60000
-    });
+    upsertResumeCard(getRoomCode(), getMyPlayerId(), "active");
   }
 });
-
-// Если вкладка закрылась аварийно без pagehide, срок считается от последнего heartbeat.
-setInterval(() => {
-  if (
-    state.map && !state.gameOver && isNetworkConnected() &&
-    getRoomCode() && getMyPlayerId()
-  ) {
-    upsertResumeCard(getRoomCode(), getMyPlayerId(), "active", {
-      expiresAt: Date.now() + 60000
-    });
-  }
-}, 5000);
 
 // --- Ресайз окна / ориентации ---
 
@@ -1334,34 +1324,22 @@ onNetworkMessage((message) => {
       showGameOver(t("gameAbandoned"));
     }
   } else if (message.type === "opponentDisconnected") {
-    if (message.playerId === 1) {
-      setStickyStatus(
-        `${t("hostOffline")} ${getRoomCode()} — ${t("noSaveResume")}`
-      );
-    } else {
-      setNetStatus(t("opponentDisconnected"));
-    }
+    startDisconnectWait(message.playerId, message.waitUntil);
   } else if (message.type === "opponentReconnected") {
-    removeDisconnectChoice(message.playerId);
-    if (message.playerId === 1) {
-      setStickyStatus("");
-    }
+    clearDisconnectWait(message.playerId);
     setNetStatus("");
-  } else if (message.type === "disconnectChoice") {
-    addDisconnectChoice(message);
   } else if (message.type === "playerReplaced") {
-    removeDisconnectChoice(message.playerId);
+    clearDisconnectWait(message.playerId);
     if (Array.isArray(message.seats)) {
       state.seatKinds = {};
       for (const seat of message.seats) {
         state.seatKinds[seat.id] = seat.kind || "human";
       }
     }
-    if (message.playerId === 1) setStickyStatus("");
-    setNetStatus(t("playerReplacedNotice"));
+    setNetStatus(t("playerReplacedNotice").replace("{player}", message.playerId));
     refreshGame();
   } else if (message.type === "playerEliminated") {
-    removeDisconnectChoice(message.playerId);
+    clearDisconnectWait(message.playerId);
     pendingEliminations.delete(message.playerId);
     eliminatePlayer(message.playerId, message.nextTurn);
     delete state.seatKinds[message.playerId];
@@ -1369,11 +1347,12 @@ onNetworkMessage((message) => {
     refreshGame();
 
     if (message.playerId === getMyPlayerId()) {
-      showGameOver(t("eliminatedYou"));
+      if (message.canSpectate) {
+        upsertResumeCard(getRoomCode(), getMyPlayerId(), "active", { spectator: true });
+      }
+      showGameOver(t("eliminatedYou"), !!message.canSpectate);
     } else if (state.gameOver) {
       showGameOver();
-    } else if (message.playerId === 1) {
-      setStickyStatus(`${t("hostEliminated")} — ${t("noSaveResume")}`);
     }
   } else if (message.type === "turnChecksum") {
     // Сверка с серверным зеркалом после каждой смены хода:
@@ -1398,6 +1377,7 @@ onNetworkMessage((message) => {
   } else if (message.type === "guestRequest") {
     addGuestRequest(message);
   } else if (message.type === "playerReturned") {
+    clearDisconnectWait(message.playerId);
     if (Array.isArray(message.seats)) {
       state.seatKinds = {};
 
@@ -1443,11 +1423,12 @@ onNetworkMessage((message) => {
 
     setNetStatus("");
     refreshGame();
+    if (message.eliminatedReturn) setStickyStatus(t("eliminatedSpectator"));
 
     if (state.gameOver) {
       showGameOver();
     } else if (isMyTurn()) {
-      startTurnTimer();
+      startTurnTimer(message.turnRemaining ?? TURN_TIME);
     } else {
       stopTurnTimer();
       timerElement.textContent = "—";
@@ -1470,14 +1451,17 @@ initLobby({
 
     const seatIds = [];
     const seatKinds = {};
+    const teams = {};
 
     for (const seat of message.seats || []) {
       if (seat && typeof seat === "object") {
         seatIds.push(seat.id);
         seatKinds[seat.id] = seat.kind || "human";
+        teams[seat.id] = seat.team || seat.id;
       } else {
         seatIds.push(seat);
         seatKinds[seat] = "human";
+        teams[seat] = seat;
       }
     }
 
@@ -1506,7 +1490,8 @@ initLobby({
 
     initGame(canvas, ctx, {
       mapId: message.mapId,
-      seats: seatIds
+      seats: seatIds,
+      teams
     });
 
     initCamera();

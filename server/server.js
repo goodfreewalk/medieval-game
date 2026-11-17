@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import express from "express";
 import { WebSocketServer } from "ws";
 
-import { state, initGame } from "../public/js/state.js";
+import { state, initGame, areAllies } from "../public/js/state.js";
 import { TERRAIN } from "../public/js/terrain.js";
 import { getMapById } from "../public/js/maps.js";
 import { BUILD } from "../public/js/build.js";
@@ -14,6 +14,7 @@ import {
   applyMove,
   applyAttack,
   applyRecruit,
+  applySendGold,
   applyEndTurn,
   eliminatePlayer,
   calculateDamage
@@ -40,7 +41,7 @@ const RECONNECT_GRACE_MS = 60000;
 const TURN_TIME_MS = 60000;
 
 // Допустимые типы игровых действий от клиента
-const GAME_ACTION_KINDS = new Set(["move", "attack", "recruit", "endTurn"]);
+const GAME_ACTION_KINDS = new Set(["move", "attack", "recruit", "sendGold", "endTurn"]);
 
 const REL_MIN = -100;
 const REL_MAX = 100;
@@ -84,6 +85,7 @@ const wss = new WebSocketServer({ server: httpServer, maxPayload: 64 * 1024 });
 console.log("WebSocket готов");
 
 const rooms = new Map();
+const roomAliases = new Map();
 
 // ---------- Сохранения ----------
 
@@ -140,6 +142,7 @@ function loadMirror(room) {
   state.units = m.units;
   state.owners = new Map(m.owners);
   state.players = m.players;
+  state.teams = m.teams || {};
   state.currentPlayer = m.currentPlayer;
   state.eliminated = new Set(m.eliminated);
   state.seatKinds = m.seatKinds;
@@ -153,6 +156,7 @@ function saveMirror(room) {
     units: state.units,
     owners: Array.from(state.owners.entries()),
     players: state.players,
+    teams: state.teams,
     currentPlayer: state.currentPlayer,
     eliminated: Array.from(state.eliminated),
     seatKinds: state.seatKinds,
@@ -178,6 +182,7 @@ function broadcastGameOver(room) {
   clearTimeout(room.autoTimer);
   room.autoTimer = null;
   broadcastToRoom(room, { type: "gameOver", winner: room.mirror.winner });
+  closeRoom(room, room.code, false);
 }
 
 // ---------- Отношения ----------
@@ -248,7 +253,7 @@ function applyPardon(room, me) {
   const size = state.map.length;
   for (const seat of room.seats) {
     const other = seat.id;
-    if (other === me || room.lastTurnAttacked.has(other)) continue;
+    if (areAllies(other, me) || room.lastTurnAttacked.has(other)) continue;
 
     let prox = false;
     outer:
@@ -304,6 +309,7 @@ function applyActionWithRelations(room, action, meId) {
   if (action.kind === "move") result = applyMove(action.unitId, action.x, action.y);
   else if (action.kind === "attack") result = applyAttack(action.attackerId, action.targetId);
   else if (action.kind === "recruit") result = applyRecruit(action.type, action.x, action.y);
+  else if (action.kind === "sendGold") result = applySendGold(action.targetPlayer, action.x, action.y);
   else if (action.kind === "endTurn") {
     applyEndTurn();
     result = { success: true };
@@ -343,11 +349,61 @@ function getRoom(ws) {
   return rooms.get(ws.roomCode) || null;
 }
 
+function resolveRoomCode(code) {
+  let current = code;
+  const seen = new Set();
+  while (roomAliases.has(current) && !seen.has(current)) {
+    seen.add(current);
+    current = roomAliases.get(current);
+  }
+  return current;
+}
+
 function generateRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
-  return rooms.has(code) ? generateRoomCode() : code;
+  while (true) {
+    let code = "";
+    for (let i = 0; i < 4; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    if (!rooms.has(code) && !roomAliases.has(code) && !fs.existsSync(savePath(code))) {
+      return code;
+    }
+  }
+}
+
+function migrateRoom(room, previousCode) {
+  const code = generateRoomCode();
+  rooms.delete(previousCode);
+  roomAliases.set(previousCode, code);
+  rooms.set(code, room);
+  room.code = code;
+
+  const targets = [...room.players, ...(room.guests || []), ...(room.spectators || [])];
+  for (const slot of targets) {
+    if (slot.ws) slot.ws.roomCode = code;
+  }
+  broadcastToRoom(room, { type: "roomMigrated", previousCode, roomCode: code });
+  console.log(`Комната ${previousCode} перенесена на код ${code}`);
+  return code;
+}
+
+function closeRoom(room, code = room.code, notify = true) {
+  clearTimeout(room.autoTimer);
+  for (const player of room.players) clearTimeout(player.disconnectTimer);
+  const targets = [...room.players, ...(room.guests || []), ...(room.spectators || [])];
+  if (notify) {
+    for (const slot of targets) sendTo(slot.ws, { type: "gameGone", roomCode: code });
+  }
+  for (const slot of targets) {
+    if (!slot.ws) continue;
+    slot.ws.roomCode = null;
+    slot.ws.playerId = null;
+    slot.ws.guestId = null;
+    slot.ws.spectatorId = null;
+  }
+  rooms.delete(code);
+  for (const [alias] of roomAliases) {
+    if (resolveRoomCode(alias) === code) roomAliases.delete(alias);
+  }
 }
 
 function broadcastToRoom(room, message) {
@@ -387,6 +443,7 @@ function sendRoomUpdate(room) {
     resumeLobby: !!room.resumeLobby,
     seatDraft: room.seatDraft || null,
     bots: room.lobbyBots || null,
+    teams: room.lobbyTeams || {},
     spectators: (room.spectators || []).map(s => ({ id: s.id, name: s.name })),
     saveInfo: room.saveData
       ? { seats: room.saveData.players, turn: room.saveData.turn }
@@ -432,18 +489,36 @@ function completeAutomaticTurn(room, expectedTurn) {
 function armTurnDriver(room) {
   clearTimeout(room.autoTimer);
   room.autoTimer = null;
+  room.turnDeadline = null;
   if (room.phase !== "game" || !room.mirror || room.mirror.gameOver) return;
 
   const kind = seatKind(room, room.turn);
 
-  if (kind === "passive" || kind === "human") {
+  if (kind === "human") {
+    const slot = room.players.find(p => p.id === room.turn);
+    if (!slot || slot.disconnected) return;
     const expectedTurn = room.turn;
-    const delay = kind === "passive" ? AUTO_TURN_DELAY_MS : TURN_TIME_MS;
+    const delay = Number.isFinite(room.turnRemaining)
+      ? Math.max(0, room.turnRemaining)
+      : TURN_TIME_MS;
+    room.turnRemaining = null;
+    room.turnDeadline = Date.now() + delay;
     room.autoTimer = setTimeout(() => completeAutomaticTurn(room, expectedTurn), delay);
     return;
   }
 
+  if (kind === "passive") {
+    const expectedTurn = room.turn;
+    room.turnRemaining = null;
+    room.autoTimer = setTimeout(
+      () => completeAutomaticTurn(room, expectedTurn),
+      AUTO_TURN_DELAY_MS
+    );
+    return;
+  }
+
   if (kind === "bot") {
+    room.turnRemaining = null;
     room.botSteps = 0;
     room.botTargetUsage = new Map();
     room.autoTimer = setTimeout(() => botStep(room), BOT_FIRST_STEP_MS);
@@ -524,6 +599,11 @@ function botStep(room) {
 
 // ---------- Восстановление из авторитетного зеркала ----------
 
+function getTurnRemaining(room) {
+  if (!room.turnDeadline) return null;
+  return Math.max(0, Math.ceil((room.turnDeadline - Date.now()) / 1000));
+}
+
 function restorePlayerState(room, slot) {
   if (!slot || !slot.ws) return;
   if (!room.mirror) {
@@ -540,34 +620,110 @@ function restorePlayerState(room, slot) {
     type: "fullState",
     roomCode: slot.ws.roomCode,
     playerId: slot.id,
-    state: room.mirror
+    state: room.mirror,
+    turnRemaining: getTurnRemaining(room)
   });
 }
 
-// После 60 секунд место уже нельзя вернуть: живые игроки выбирают его судьбу.
-function expireDisconnect(room, code, playerId) {
+function substituteSeatWithBot(room, code, playerId) {
   const slot = room.players.find(p => p.id === playerId);
-  if (!slot || !slot.disconnected) return;
-  slot.disconnectExpired = true;
+  const seat = (room.seats || []).find(s => s.id === playerId && s.kind === "human");
+  if (!slot || !seat) return;
 
-  let targets = room.players.filter(p => !p.disconnected && p.id !== playerId);
-  if (playerId !== 1) targets = targets.filter(p => p.id === 1);
-  if (targets.length === 0) {
-    eliminateSeat(room, code, playerId);
+  clearTimeout(slot.disconnectTimer);
+  if (room.turn === playerId) clearTimeout(room.autoTimer);
+  room.players = room.players.filter(p => p !== slot);
+  seat.kind = "bot";
+  seat.personality = "balanced";
+  seat.substitute = true;
+
+  loadMirror(room);
+  state.seatKinds[playerId] = "bot";
+  saveMirror(room);
+
+  if (room.players.length === 0) {
+    closeRoom(room, code);
+    console.log(`Комната ${code} завершена: людей не осталось`);
     return;
   }
 
-  for (const target of targets) {
-    sendTo(target.ws, { type: "disconnectChoice", playerId });
-  }
+  if (playerId === 1) code = migrateRoom(room, code);
+  broadcastToRoom(room, {
+    type: "playerReplaced",
+    playerId,
+    kind: "bot",
+    seats: room.seats.slice()
+  });
+  sendRelations(room);
+  sendTurnChecksum(room);
+  if (room.turn === playerId) armTurnDriver(room);
 }
 
-// ---------- Устранения ----------
+function expireDisconnect(room, code, playerId) {
+  const slot = room.players.find(p => p.id === playerId);
+  if (!slot || !slot.disconnected) return;
+  substituteSeatWithBot(room, code, playerId);
+}
+
+function returnPlayer(room, ws, playerId, name, requestedCode) {
+  const seat = (room.seats || []).find(s => s.id === playerId);
+  let slot = room.players.find(p => p.id === playerId);
+  const disconnected = slot && slot.disconnected && seat?.kind === "human";
+  const substituted = !slot && seat?.kind === "bot" && seat.substitute;
+  if (!disconnected && !substituted) return false;
+
+  if (room.turn === playerId) clearTimeout(room.autoTimer);
+  if (slot) {
+    clearTimeout(slot.disconnectTimer);
+    slot.disconnectTimer = null;
+  } else {
+    slot = { id: playerId, name, ready: true };
+    room.players.push(slot);
+  }
+
+  slot.ws = ws;
+  slot.disconnected = false;
+  slot.hasState = false;
+  seat.kind = "human";
+  seat.personality = null;
+  seat.substitute = false;
+  ws.roomCode = room.code;
+  ws.playerId = playerId;
+  ws.guestId = null;
+  ws.spectatorId = null;
+
+  if (requestedCode !== room.code) {
+    sendTo(ws, {
+      type: "roomMigrated",
+      previousCode: requestedCode,
+      roomCode: room.code
+    });
+  }
+  sendTo(ws, { type: "rejoinOk", playerId, roomCode: room.code });
+  broadcastToRoom(room, {
+    type: "playerReturned",
+    playerId,
+    seats: room.seats.slice()
+  });
+
+  loadMirror(room);
+  state.seatKinds[playerId] = "human";
+  saveMirror(room);
+  if (room.turn === playerId) armTurnDriver(room);
+  restorePlayerState(room, slot);
+  sendRelations(room);
+  sendTurnChecksum(room);
+  return true;
+}
+
+// ---------- Боевое устранение ----------
 
 function eliminateSeat(room, code, playerId) {
   const slot = room.players.find(p => p.id === playerId);
   if (slot) clearTimeout(slot.disconnectTimer);
   clearTimeout(room.autoTimer);
+  if (!room.eliminatedSeats) room.eliminatedSeats = new Set();
+  room.eliminatedSeats.add(playerId);
 
   room.players = room.players.filter(p => p.id !== playerId);
   room.seats = (room.seats || []).filter(s => s.id !== playerId);
@@ -577,22 +733,33 @@ function eliminateSeat(room, code, playerId) {
     room.turn = nextSeat(room, playerId);
   }
 
+  let canSpectate = false;
   if (room.mirror) {
     loadMirror(room);
     eliminatePlayer(playerId, room.turn);
     saveMirror(room);
+    canSpectate = !state.gameOver && (room.spectators || []).length < MAX_SPECTATORS;
   }
 
-  broadcastToRoom(room, { type: "playerEliminated", playerId, nextTurn: room.turn });
+  sendTo(slot && slot.ws, {
+    type: "playerEliminated",
+    playerId,
+    nextTurn: room.turn,
+    canSpectate
+  });
+  broadcastToRoom(room, {
+    type: "playerEliminated",
+    playerId,
+    nextTurn: room.turn,
+    canSpectate
+  });
   sendRelations(room);
   sendTurnChecksum(room);
   broadcastGameOver(room);
+  if (room.mirror.gameOver) return;
 
-  if (room.players.length === 0 && (room.guests || []).length === 0 && (room.spectators || []).length === 0) {
-    clearTimeout(room.autoTimer);
-    room.autoTimer = null;
-    rooms.delete(code);
-    console.log(`Комната ${code} пуста после устранения`);
+  if (room.players.length === 0) {
+    closeRoom(room, code);
     return;
   }
 
@@ -645,10 +812,13 @@ wss.on("connection", (ws) => {
     if (message.type === "createRoom") {
       const code = generateRoomCode();
       const room = {
+        code,
         players: [],
         guests: [],
         spectators: [],
         lobbyBots: [],
+        lobbyTeams: {},
+        eliminatedSeats: new Set(),
         phase: "lobby",
         resumeLobby: false,
         turn: 1,
@@ -705,6 +875,18 @@ wss.on("connection", (ws) => {
       return;
     }
 
+    if (message.type === "setLobbyTeam") {
+      const room = getRoom(ws);
+      if (!room || room.phase !== "lobby" || room.resumeLobby || ws.playerId !== 1) return;
+      const seatId = message.seatId;
+      const team = message.team;
+      if (!Number.isInteger(seatId) || seatId < 1 || seatId > mapMaxSeats(room)) return;
+      if (!Number.isInteger(team) || team < 1 || team > MAX_PLAYERS) return;
+      room.lobbyTeams[seatId] = team;
+      sendRoomUpdate(room);
+      return;
+    }
+
     // ---------- Сохранение партии ----------
     if (message.type === "saveGame") {
       const room = getRoom(ws);
@@ -718,7 +900,13 @@ wss.on("connection", (ws) => {
         turn: room.turn,
         players: (room.seats || []).map(s => {
           const human = room.players.find(p => p.id === s.id);
-          return { id: s.id, kind: s.kind, personality: s.personality || null, name: human ? human.name : null };
+          return {
+            id: s.id,
+            kind: s.kind,
+            personality: s.personality || null,
+            team: s.team || s.id,
+            name: human ? human.name : null
+          };
         }),
         state: room.mirror || message.state,
         relations: room.relations || {},
@@ -773,10 +961,13 @@ wss.on("connection", (ws) => {
       }
 
       const room = {
+        code,
         players: [],
         guests: [],
         spectators: [],
         lobbyBots: [],
+        lobbyTeams: {},
+        eliminatedSeats: new Set(),
         phase: "lobby",
         resumeLobby: true,
         saveData: save,
@@ -813,7 +1004,8 @@ wss.on("connection", (ws) => {
     // ---------- Вход в комнату ----------
     if (message.type === "joinRoom") {
       const code = safeCode(message.roomCode);
-      const room = code ? rooms.get(code) : null;
+      const resolvedCode = code && !message.resumeSaved ? resolveRoomCode(code) : code;
+      const room = resolvedCode ? rooms.get(resolvedCode) : null;
       if (!room) {
         const { save } = readSave(code || "");
         sendTo(ws, { type: "error", code: save ? "resumeNotOpened" : "roomNotFound", roomCode: code });
@@ -835,39 +1027,45 @@ wss.on("connection", (ws) => {
         const wanted = message.preferredSeat;
         const seat = (room.seats || []).find(s => s.id === wanted);
 
-        if (seat && seat.kind === "human") {
-          const slot = room.players.find(p => p.id === wanted);
-          if (slot && slot.disconnected && !slot.disconnectExpired) {
-            slot.ws = ws;
-            slot.disconnected = false;
-            slot.disconnectExpired = false;
-            slot.hasState = false;
-            clearTimeout(slot.disconnectTimer);
-            slot.disconnectTimer = null;
-            ws.roomCode = code;
-            ws.playerId = wanted;
-
-            sendTo(ws, { type: "rejoinOk", playerId: wanted, roomCode: code });
-            for (const player of room.players) {
-              if (player.id !== wanted) sendTo(player.ws, { type: "opponentReconnected", playerId: wanted });
-            }
-            restorePlayerState(room, slot);
-            sendRelations(room);
-            armTurnDriver(room);
+        if (message.joinAsSpectator && room.eliminatedSeats?.has(wanted)) {
+          if ((room.spectators || []).length >= MAX_SPECTATORS) {
+            sendTo(ws, { type: "error", code: "spectatorsFull", roomCode: code });
             return;
           }
-          if (slot && slot.disconnected && slot.disconnectExpired) {
-            sendTo(ws, { type: "gameGone", roomCode: code });
-          } else {
-            sendTo(ws, { type: "error", code: "roomFull" });
+          const spectatorId = room.nextSpectatorId++;
+          room.spectators.push({ ws, id: spectatorId, name });
+          ws.roomCode = room.code;
+          ws.spectatorId = spectatorId;
+          if (code !== room.code) {
+            sendTo(ws, {
+              type: "roomMigrated",
+              previousCode: code,
+              roomCode: room.code
+            });
           }
+          sendTo(ws, {
+            type: "roomJoined",
+            roomCode: room.code,
+            playerId: null,
+            spectatorId,
+            mapId: room.mapId
+          });
+          sendTo(ws, {
+            type: "fullState",
+            roomCode: room.code,
+            playerId: null,
+            state: room.mirror,
+            eliminatedReturn: true
+          });
           return;
         }
+
+        if (seat && returnPlayer(room, ws, wanted, name, code)) return;
 
         if (seat && seat.kind === "passive") {
           const guestId = room.nextGuestId++;
           room.guests.push({ ws, guestId, name, requestedSeat: wanted });
-          ws.roomCode = code;
+          ws.roomCode = room.code;
           ws.guestId = guestId;
           sendTo(ws, { type: "waitingApproval" });
           const host = room.players.find(p => p.id === 1);
@@ -875,7 +1073,7 @@ wss.on("connection", (ws) => {
           return;
         }
 
-        sendTo(ws, { type: "error", code: "roomFull" });
+        sendTo(ws, { type: "error", code: "roomFull", roomCode: code });
         return;
       }
 
@@ -886,9 +1084,9 @@ wss.on("connection", (ws) => {
         let autoSeated = false;
         if (draft && draft.kind === "passive") { draft.kind = "human"; draft.guestId = guestId; autoSeated = true; }
         room.guests.push({ ws, guestId, name, requestedSeat: autoSeated ? preferred : null });
-        ws.roomCode = code;
+        ws.roomCode = room.code;
         ws.guestId = guestId;
-        sendTo(ws, { type: "roomJoined", roomCode: code, playerId: null, guestId, mapId: room.mapId, resumeLobby: true });
+        sendTo(ws, { type: "roomJoined", roomCode: room.code, playerId: null, guestId, mapId: room.mapId, resumeLobby: true });
         sendRoomUpdate(room);
         return;
       }
@@ -906,11 +1104,11 @@ wss.on("connection", (ws) => {
 
       if (newId !== null) {
         room.players.push({ ws, id: newId, name, ready: false, hasState: false });
-        ws.roomCode = code;
+        ws.roomCode = room.code;
         ws.playerId = newId;
-        sendTo(ws, { type: "roomJoined", roomCode: code, playerId: newId, mapId: room.mapId });
+        sendTo(ws, { type: "roomJoined", roomCode: room.code, playerId: newId, mapId: room.mapId });
         sendRoomUpdate(room);
-        console.log(`Игрок ${newId} зашёл в комнату ${code}`);
+        console.log(`Игрок ${newId} зашёл в комнату ${room.code}`);
         return;
       }
 
@@ -922,15 +1120,15 @@ wss.on("connection", (ws) => {
 
       const spectatorId = room.nextSpectatorId++;
       room.spectators.push({ ws, id: spectatorId, name });
-      ws.roomCode = code;
+      ws.roomCode = room.code;
       ws.spectatorId = spectatorId;
-      sendTo(ws, { type: "roomJoined", roomCode: code, playerId: null, spectatorId, mapId: room.mapId });
+      sendTo(ws, { type: "roomJoined", roomCode: room.code, playerId: null, spectatorId, mapId: room.mapId });
       sendRoomUpdate(room);
 
       // Хосту — только информационное сообщение, без кнопок
       const host = room.players.find(p => p.id === 1);
       sendTo(host && host.ws, { type: "spectatorJoined", spectatorId, name });
-      console.log(`Наблюдатель ${spectatorId} (${name}) в комнате ${code}`);
+      console.log(`Наблюдатель ${spectatorId} (${name}) в комнате ${room.code}`);
       return;
     }
 
@@ -999,8 +1197,17 @@ wss.on("connection", (ws) => {
       if (ws.playerId !== 1) return;
 
       const seats = [
-        ...room.players.map(p => ({ id: p.id, kind: "human" })),
-        ...room.lobbyBots.map(b => ({ id: b.id, kind: "bot", personality: b.personality }))
+        ...room.players.map(p => ({
+          id: p.id,
+          kind: "human",
+          team: room.lobbyTeams[p.id] || p.id
+        })),
+        ...room.lobbyBots.map(b => ({
+          id: b.id,
+          kind: "bot",
+          personality: b.personality,
+          team: room.lobbyTeams[b.id] || b.id
+        }))
       ];
 
       const mapDef = getMapById(room.mapId);
@@ -1022,7 +1229,8 @@ wss.on("connection", (ws) => {
       room.turn = 1;
       room.seats = seats;
 
-      initGame(null, null, { mapId: room.mapId, seats: seats.map(s => s.id) });
+      const teams = Object.fromEntries(seats.map(seat => [seat.id, seat.team]));
+      initGame(null, null, { mapId: room.mapId, seats: seats.map(s => s.id), teams });
       state.seatKinds = {};
       for (const seat of seats) state.seatKinds[seat.id] = seat.kind;
       saveMirror(room);
@@ -1056,8 +1264,19 @@ wss.on("connection", (ws) => {
 
       for (const seatId of savedIds) {
         const draft = room.seatDraft[seatId] || { kind: "passive" };
-        if (draft.kind === "eliminate") { eliminated.push(seatId); continue; }
-        seats.push({ id: seatId, kind: draft.kind, personality: draft.personality || null });
+        const savedSeat = room.saveData.players.find(p => p.id === seatId);
+        if (draft.kind === "eliminate") {
+          eliminated.push(seatId);
+          room.eliminatedSeats.add(seatId);
+          continue;
+        }
+        seats.push({
+          id: seatId,
+          kind: draft.kind,
+          personality: draft.personality || null,
+          team: savedSeat?.team || room.saveData.state.teams?.[seatId] || seatId,
+          substitute: false
+        });
         if (draft.kind === "human") {
           if (seatId === 1) {
             players.push(room.players.find(p => p.id === 1));
@@ -1104,6 +1323,7 @@ wss.on("connection", (ws) => {
 
       room.mirror = room.saveData.state;
       loadMirror(room);
+      state.teams = Object.fromEntries(seats.map(seat => [seat.id, seat.team]));
       for (const id of eliminated) eliminatePlayer(id, id === state.currentPlayer ? turn : null);
       state.seatKinds = {};
       for (const seat of seats) state.seatKinds[seat.id] = seat.kind;
@@ -1188,37 +1408,6 @@ wss.on("connection", (ws) => {
       return;
     }
 
-    // ---------- Замена места после истечения возврата ----------
-    if (message.type === "resolveDisconnected") {
-      const room = getRoom(ws);
-      const playerId = message.playerId;
-      const kind = message.kind;
-      if (!room || room.phase !== "game" || !room.mirror || room.mirror.gameOver) return;
-      if (playerId !== 1 && ws.playerId !== 1) return;
-      if (kind !== "bot" && kind !== "passive" && kind !== "eliminate") return;
-
-      const slot = room.players.find(p => p.id === playerId);
-      const seat = (room.seats || []).find(s => s.id === playerId && s.kind === "human");
-      if (!slot || !slot.disconnected || !slot.disconnectExpired || !seat) return;
-
-      if (kind === "eliminate") {
-        eliminateSeat(room, ws.roomCode, playerId);
-        return;
-      }
-
-      room.players = room.players.filter(p => p !== slot);
-      seat.kind = kind;
-      seat.personality = kind === "bot" ? "balanced" : null;
-      loadMirror(room);
-      state.seatKinds[playerId] = kind;
-      saveMirror(room);
-      broadcastToRoom(room, { type: "playerReplaced", playerId, kind, seats: room.seats.slice() });
-      sendRelations(room);
-      sendTurnChecksum(room);
-      armTurnDriver(room);
-      return;
-    }
-
     // ---------- Выход ----------
     if (message.type === "leaveRoom") {
       const code = ws.roomCode;
@@ -1243,33 +1432,39 @@ wss.on("connection", (ws) => {
         return;
       }
 
-      room.players = room.players.filter(p => p.ws !== ws);
-
       if (room.phase === "lobby") {
+        room.players = room.players.filter(p => p.ws !== ws);
         if (playerId === 1) {
           for (const player of room.players) sendTo(player.ws, { type: "roomClosed", code: "hostLeft" });
           for (const guest of room.guests || []) sendTo(guest.ws, { type: "roomClosed", code: "hostLeft" });
           for (const spec of room.spectators || []) sendTo(spec.ws, { type: "roomClosed", code: "hostLeft" });
-          rooms.delete(code);
+          closeRoom(room, code, false);
           console.log(`Комната ${code} закрыта: хост вышел`);
         } else {
           sendRoomUpdate(room);
-          if (room.players.length === 0 && (room.guests || []).length === 0 && (room.spectators || []).length === 0) rooms.delete(code);
+          if (room.players.length === 0 && (room.guests || []).length === 0 && (room.spectators || []).length === 0) {
+            closeRoom(room, code, false);
+          }
         }
       } else {
-        eliminateSeat(room, code, playerId);
+        if (room.players.length === 1 && room.players.some(p => p.ws === ws)) {
+          sendTo(ws, { type: "gameGone", roomCode: code });
+        }
+        substituteSeatWithBot(room, code, playerId);
       }
       return;
     }
 
     // ---------- Rejoin ----------
     if (message.type === "rejoinRoom") {
-      const room = rooms.get(message.roomCode);
+      const requestedCode = safeCode(message.roomCode);
+      const code = requestedCode ? resolveRoomCode(requestedCode) : null;
+      const room = code ? rooms.get(code) : null;
       if (
         !room || room.phase !== "game" ||
         (room.mirror && room.mirror.gameOver)
       ) {
-        sendTo(ws, { type: "gameGone", roomCode: message.roomCode });
+        sendTo(ws, { type: "gameGone", roomCode: requestedCode });
         return;
       }
 
@@ -1278,28 +1473,9 @@ wss.on("connection", (ws) => {
         return;
       }
 
-      const slot = room.players.find(p => p.id === message.playerId);
-      if (!slot || !slot.disconnected || slot.disconnectExpired) {
-        sendTo(ws, { type: "gameGone", roomCode: message.roomCode });
-        return;
+      if (!returnPlayer(room, ws, message.playerId, "Игрок", requestedCode)) {
+        sendTo(ws, { type: "gameGone", roomCode: requestedCode });
       }
-
-      slot.ws = ws;
-      slot.disconnected = false;
-      slot.disconnectExpired = false;
-      slot.hasState = false;
-      clearTimeout(slot.disconnectTimer);
-      slot.disconnectTimer = null;
-      ws.roomCode = message.roomCode;
-      ws.playerId = message.playerId;
-
-      sendTo(ws, { type: "rejoinOk", playerId: message.playerId, roomCode: message.roomCode });
-      for (const player of room.players) {
-        if (player.id !== message.playerId) sendTo(player.ws, { type: "opponentReconnected", playerId: message.playerId });
-      }
-      restorePlayerState(room, slot);
-      sendRelations(room);
-      armTurnDriver(room);
       return;
     }
 
@@ -1317,7 +1493,8 @@ wss.on("connection", (ws) => {
         type: "fullState",
         roomCode: ws.roomCode,
         playerId: ws.playerId,
-        state: room.mirror
+        state: room.mirror,
+        turnRemaining: getTurnRemaining(room)
       });
       return;
     }
@@ -1409,7 +1586,7 @@ wss.on("connection", (ws) => {
     ws.guestId = null;
     ws.spectatorId = null;
     if (!code) return;
-    const room = rooms.get(code);
+    const room = rooms.get(resolveRoomCode(code));
     if (!room) return;
 
     if (spectatorId !== null && playerId === null) {
@@ -1431,24 +1608,33 @@ wss.on("connection", (ws) => {
       for (const player of remaining) sendTo(player.ws, { type: "roomClosed", code: leftCode });
       for (const guest of room.guests || []) sendTo(guest.ws, { type: "roomClosed", code: leftCode });
       for (const spec of room.spectators || []) sendTo(spec.ws, { type: "roomClosed", code: leftCode });
-      rooms.delete(code);
-      console.log(`Комната ${code} закрыта из-за отключения`);
+      closeRoom(room, room.code, false);
+      console.log(`Комната ${room.code} закрыта из-за отключения`);
       return;
     }
 
     const slot = room.players.find(p => p.id === playerId);
     if (!slot || slot.ws !== ws) return;
     slot.disconnected = true;
-    slot.disconnectExpired = false;
     slot.ws = null;
-    for (const player of room.players) {
-      if (player.id !== playerId) sendTo(player.ws, { type: "opponentDisconnected", playerId });
+    slot.hasState = false;
+    if (room.turn === playerId && room.turnDeadline) {
+      room.turnRemaining = Math.max(0, room.turnDeadline - Date.now());
+      room.turnDeadline = null;
+      clearTimeout(room.autoTimer);
+      room.autoTimer = null;
     }
+    broadcastToRoom(room, {
+      type: "opponentDisconnected",
+      playerId,
+      waitUntil: Date.now() + RECONNECT_GRACE_MS
+    });
     clearTimeout(slot.disconnectTimer);
     slot.disconnectTimer = setTimeout(() => {
-      const current = rooms.get(code);
+      const currentCode = resolveRoomCode(code);
+      const current = rooms.get(currentCode);
       if (!current) return;
-      expireDisconnect(current, code, playerId);
+      expireDisconnect(current, currentCode, playerId);
     }, RECONNECT_GRACE_MS);
   });
 });

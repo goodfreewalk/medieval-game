@@ -133,6 +133,12 @@ select:focus {
   border-color: rgba(212, 162, 78, 0.6);
 }
 
+#mapSelect option,
+#playerList option {
+  color: #20242d;
+  background: #fff;
+}
+
 .menuRow {
   display: flex;
   gap: 8px;
@@ -240,6 +246,10 @@ select:focus {
   margin-left: 8px;
   padding: 4px 6px;
   font-size: 13px;
+}
+
+#playerList .teamSelect {
+  width: 112px;
 }
 
 #mapPreview {

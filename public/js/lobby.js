@@ -1,4 +1,4 @@
-import { onNetworkMessage, sendMessage } from "./network.js";
+import { onNetworkMessage, sendMessage, saveGameSession } from "./network.js";
 import { t } from "./i18n.js";
 import { MAPS, getMapById } from "./maps.js";
 import { BUILD } from "./build.js";
@@ -18,7 +18,6 @@ let onGameStartCb = null;
 const pendingSpectatorCards = new Map();
 
 const RESUME_KEY = "resumeCards";
-const AUTO_RESUME_MS = 60000;
 const MAX_SAVED_CARDS = 64;
 
 const PREVIEW_COLORS = {
@@ -63,6 +62,17 @@ export function removeResumeCard(code, type = null) {
   renderResumeCards();
 }
 
+function moveResumeCard(oldCode, newCode) {
+  if (!oldCode || !newCode || oldCode === newCode) return;
+  const cards = readResumeCards();
+  const card = cards[`active:${oldCode}`];
+  if (!card) return;
+  delete cards[`active:${oldCode}`];
+  cards[`active:${newCode}`] = { ...card, code: newCode, at: Date.now() };
+  localStorage.setItem(RESUME_KEY, JSON.stringify(cards));
+  renderResumeCards();
+}
+
 function readResumeCards() {
   let stored;
   try {
@@ -72,21 +82,12 @@ function readResumeCards() {
   }
 
   const cards = {};
-  const now = Date.now();
   let migrated = false;
   for (const [key, card] of Object.entries(stored)) {
     if (!card || !card.code) continue;
     const type = card.type === "active" || card.type === "saved"
       ? card.type
       : card.token ? "saved" : "active";
-    if (
-      type === "active" &&
-      ((card.expiresAt && card.expiresAt <= now) ||
-        (!card.expiresAt && now - (card.at || 0) > AUTO_RESUME_MS))
-    ) {
-      migrated = true;
-      continue;
-    }
     const normalizedKey = `${type}:${card.code}`;
     cards[normalizedKey] = { ...card, type };
     if (key !== normalizedKey || card.type !== type) migrated = true;
@@ -131,7 +132,7 @@ function renderResumeCards() {
       btn.className = "resumeCardButton";
       const label = document.createElement("span");
       const labelKey = type === "active"
-        ? "resumeActiveCard"
+        ? card.spectator ? "resumeSpectatorCard" : "resumeActiveCard"
         : card.playerId === 1 ? "resumeHostCard" : "resumeJoinCard";
       label.textContent = `${t(labelKey)}: ${card.code}`;
       btn.appendChild(label);
@@ -144,7 +145,7 @@ function renderResumeCards() {
         meta.textContent = `${date} · ${t(mapDef.nameKey)} · ` +
           `${t("turn")}: ${card.turn ?? "?"}`;
       } else {
-        meta.textContent = t("activeCardMeta");
+        meta.textContent = card.spectator ? t("eliminatedSpectator") : t("activeCardMeta");
       }
       btn.appendChild(meta);
 
@@ -164,6 +165,7 @@ function renderResumeCards() {
             roomCode: card.code,
             preferredSeat: card.playerId,
             resumeSaved: card.type === "saved",
+            joinAsSpectator: !!card.spectator,
             name,
             build: BUILD
           });
@@ -237,6 +239,29 @@ function clearSpectatorCards() {
 }
 
 // ---------- Рендер лобби ----------
+
+function appendTeamControl(li, seatId, update) {
+  const team = (update.teams || {})[seatId] || seatId;
+  if (isHost) {
+    const select = document.createElement("select");
+    select.className = "teamSelect";
+    for (let id = 1; id <= 4; id++) {
+      const option = document.createElement("option");
+      option.value = String(id);
+      option.textContent = `${t("teamLabel")} ${id}`;
+      select.appendChild(option);
+    }
+    select.value = String(team);
+    select.addEventListener("change", () => {
+      sendMessage({ type: "setLobbyTeam", seatId, team: Number(select.value) });
+    });
+    li.appendChild(select);
+  } else {
+    const span = document.createElement("span");
+    span.textContent = ` · ${t("teamLabel")} ${team}`;
+    li.appendChild(span);
+  }
+}
 
 function renderLobby() {
   const update = lastUpdate || {};
@@ -314,6 +339,7 @@ function renderLobby() {
         li.appendChild(span);
       }
 
+      appendTeamControl(li, seatId, update);
       list.appendChild(li);
     }
 
@@ -494,6 +520,13 @@ function handleMessage(message) {
     return;
   }
 
+  if (message.type === "roomMigrated") {
+    moveResumeCard(message.previousCode, message.roomCode);
+    myRoomCode = message.roomCode;
+    if (myPlayerId) saveGameSession(myRoomCode, myPlayerId);
+    return;
+  }
+
   if (message.type === "roomUpdate") {
     lastUpdate = message;
     renderLobby();
@@ -527,9 +560,12 @@ function handleMessage(message) {
 
   if (message.type === "error") {
     if (
-      (message.code === "roomNotFound" || message.code === "resumeNotOpened") &&
-      message.roomCode
+      (message.code === "roomNotFound" || message.code === "resumeNotOpened" ||
+        message.code === "spectatorsFull") && message.roomCode
     ) {
+      removeResumeCard(message.roomCode, "active");
+    }
+    if (message.code === "roomFull" && message.roomCode) {
       removeResumeCard(message.roomCode, "active");
     }
     const text = t(message.code) || message.code;
