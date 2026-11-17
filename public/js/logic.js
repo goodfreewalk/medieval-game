@@ -11,6 +11,7 @@ import {
 } from "./units.js";
 import {
   state,
+  areAllies,
   getTerrainAt,
   captureTile,
   collectIncome,
@@ -68,7 +69,7 @@ export function getReachableTiles(unit) {
 
       const occupant = getUnitAtTile(state.units, nextX, nextY);
 
-      if (occupant && occupant.owner !== unit.owner) {
+      if (occupant && !areAllies(occupant.owner, unit.owner)) {
         continue;
       }
 
@@ -118,7 +119,7 @@ export function getAttackableTiles(unit) {
   const range = UNIT_TYPES[unit.type].range;
 
   for (const enemy of state.units) {
-    if (enemy.owner === unit.owner) {
+    if (areAllies(enemy.owner, unit.owner)) {
       continue;
     }
 
@@ -180,7 +181,7 @@ export function canAttackUnit(attacker, target) {
     return false;
   }
 
-  if (attacker.owner === target.owner) {
+  if (areAllies(attacker.owner, target.owner)) {
     return false;
   }
 
@@ -361,6 +362,27 @@ export function applyRecruit(type, x, y) {
   return { success: true };
 }
 
+export function applySendGold(targetPlayer, x, y, amount = 10) {
+  const sender = state.currentPlayer;
+  const terrain = getTerrainAt(x, y);
+
+  if (
+    (amount !== 10 && amount !== 20) ||
+    sender === targetPlayer ||
+    !areAllies(sender, targetPlayer) ||
+    (terrain !== TERRAIN.CASTLE && terrain !== TERRAIN.VILLAGE) ||
+    getTileOwner(x, y) !== targetPlayer ||
+    !state.players[targetPlayer] ||
+    getPlayerGold(sender) < amount
+  ) {
+    return { success: false };
+  }
+
+  state.players[sender].gold -= amount;
+  state.players[targetPlayer].gold += amount;
+  return { success: true };
+}
+
 export function applyEndTurn() {
   endTurn();
 }
@@ -525,10 +547,14 @@ export function checkEliminationAndVictory() {
     player => playersWithUnits.has(player) || playersWithTerritories.has(player)
   );
 
+  const aliveTeams = new Set(
+    alivePlayers.map(player => state.teams[player] || player)
+  );
+
   if (alivePlayers.length === 0) {
     state.gameOver = true;
     state.winner = null;
-  } else if (alivePlayers.length === 1) {
+  } else if (aliveTeams.size === 1) {
     state.gameOver = true;
     state.winner = alivePlayers[0];
   }

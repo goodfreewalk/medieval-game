@@ -133,6 +133,12 @@ select:focus {
   border-color: rgba(212, 162, 78, 0.6);
 }
 
+#mapSelect option,
+#playerList option {
+  color: #20242d;
+  background: #fff;
+}
+
 .menuRow {
   display: flex;
   gap: 8px;
@@ -229,6 +235,10 @@ select:focus {
 }
 
 #playerList li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 8px;
@@ -237,9 +247,34 @@ select:focus {
 }
 
 #playerList select {
-  margin-left: 8px;
+  min-width: 0;
+  margin-left: auto;
   padding: 4px 6px;
   font-size: 13px;
+}
+
+#playerList .teamSelect {
+  flex: 0 1 112px;
+  width: 112px;
+  margin-left: 0;
+}
+
+#playerList .teamValue {
+  margin-left: auto;
+}
+
+#playerList .playerColorSelect,
+#playerList .playerColorSwatch {
+  flex: 0 0 112px;
+  width: 112px;
+  height: 30px;
+  margin-left: auto;
+  border-radius: 4px;
+}
+
+#playerList .playerColorSwatch {
+  display: block;
+  border: 1px solid rgba(255, 255, 255, 0.35);
 }
 
 #mapPreview {
@@ -679,6 +714,26 @@ select:focus {
   font-size: 13px;
   background: linear-gradient(180deg, #46a758, #2f7e3f);
   box-shadow: 0 3px 0 #1d5427, 0 6px 14px rgba(0, 0, 0, 0.35);
+}
+
+.goldHelpRow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.goldHelpRow .recruitButton {
+  flex: 0 1 auto;
+  white-space: nowrap;
+}
+
+.goldHelpRow .recruitButton.sent,
+.goldHelpRow .recruitButton.sent:disabled {
+  background: linear-gradient(180deg, #2f7e3f, #1d5427);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.45);
+  color: #ffffff;
+  opacity: 1;
+  transform: translateY(2px);
 }
 
 .recruitStats {
