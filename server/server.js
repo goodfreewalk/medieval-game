@@ -446,6 +446,29 @@ function lobbyColor(room, seatId) {
     : DEFAULT_PLAYER_COLOR_IDS[seatId] || "blue";
 }
 
+function normalizeLobbyColors(room, preferredSeatId = null) {
+  let seatIds = room.resumeLobby
+    ? Object.entries(room.seatDraft || {})
+      .filter(([, draft]) => draft.kind !== "eliminate")
+      .map(([id]) => Number(id))
+    : [...room.players, ...room.lobbyBots].map(seat => seat.id);
+  seatIds.sort((a, b) => a - b);
+
+  if (preferredSeatId !== null) {
+    seatIds = [preferredSeatId, ...seatIds.filter(id => id !== preferredSeatId)];
+  }
+
+  const used = new Set();
+  for (const seatId of seatIds) {
+    let color = lobbyColor(room, seatId);
+    if (used.has(color)) {
+      color = COLOR_CHOICES.find(choice => !used.has(choice.id)).id;
+      room.lobbyColors[seatId] = color;
+    }
+    used.add(color);
+  }
+}
+
 function sendRoomUpdate(room) {
   const colors = {};
   for (let seatId = 1; seatId <= mapMaxSeats(room); seatId++) {
@@ -925,6 +948,7 @@ wss.on("connection", (ws) => {
       if (!ownHumanSeat && !hostBotSeat) return;
 
       room.lobbyColors[seatId] = message.color;
+      normalizeLobbyColors(room, seatId);
       sendRoomUpdate(room);
       return;
     }
@@ -1036,6 +1060,7 @@ wss.on("connection", (ws) => {
         }
       }
 
+      normalizeLobbyColors(room);
       rooms.set(code, room);
       room.players.push({ ws, id: 1, name: String(message.name || "Игрок 1").slice(0, 24), ready: true, hasState: false });
       ws.roomCode = code;
@@ -1242,6 +1267,7 @@ wss.on("connection", (ws) => {
       if (!room || room.resumeLobby) return;
       if (ws.playerId !== 1) return;
 
+      normalizeLobbyColors(room);
       const seats = [
         ...room.players.map(p => ({
           id: p.id,
@@ -1306,6 +1332,7 @@ wss.on("connection", (ws) => {
       const room = getRoom(ws);
       if (!room || !room.resumeLobby || ws.playerId !== 1) return;
 
+      normalizeLobbyColors(room);
       const eliminated = [];
       const seats = [];
       const players = [];
