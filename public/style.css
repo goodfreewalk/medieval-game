@@ -727,12 +727,9 @@ select:focus {
   white-space: nowrap;
 }
 
-.goldHelpRow .recruitButton.sent,
-.goldHelpRow .recruitButton.sent:disabled {
-  background: linear-gradient(180deg, #2f7e3f, #1d5427);
-  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.45);
-  color: #ffffff;
-  opacity: 1;
+.goldHelpRow .recruitButton:active,
+.goldHelpRow .recruitButton.pressed {
+  box-shadow: 0 1px 0 #1d5427, 0 3px 8px rgba(0, 0, 0, 0.35);
   transform: translateY(2px);
 }
 

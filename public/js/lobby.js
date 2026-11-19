@@ -15,6 +15,7 @@ let resumeLobby = false;
 let myReady = false;
 let lastUpdate = null;
 let onGameStartCb = null;
+let lobbyStatusTimer = null;
 
 const pendingSpectatorCards = new Map();
 
@@ -329,7 +330,7 @@ function renderLobby() {
       label.textContent = `${t("seatLabel")} ${seatId}: `;
       li.appendChild(label);
 
-      if (human) {
+      if (human && (!isHost || seatId === 1)) {
         const span = document.createElement("span");
         const mark = human.id === myPlayerId ? ` ${t("you")}` : "";
         span.textContent = `${human.name}${mark} — ` +
@@ -338,7 +339,14 @@ function renderLobby() {
       } else if (isHost) {
         const select = document.createElement("select");
 
-        const opts = [{ value: "none", text: t("seatNone") }];
+        const opts = [];
+        if (human) {
+          opts.push({
+            value: `human:${human.id}`,
+            text: `${human.name} — ${human.ready ? t("readyMark") : t("notReadyMark")}`
+          });
+        }
+        opts.push({ value: "none", text: t("seatNone") });
         opts.push({ value: "bot:balanced", text: t("botBalanced") });
         opts.push({ value: "bot:aggressive", text: t("botAggressive") });
         for (const spec of update.spectators || []) {
@@ -355,10 +363,13 @@ function renderLobby() {
           select.appendChild(op);
         }
 
-        select.value = bot ? `bot:${bot.personality || "balanced"}` : "none";
+        select.value = human
+          ? `human:${human.id}`
+          : bot ? `bot:${bot.personality || "balanced"}` : "none";
 
         select.addEventListener("change", () => {
           const [kind, arg] = select.value.split(":");
+          if (kind === "human") return;
           sendMessage({
             type: "setLobbySeat",
             seatId,
@@ -448,13 +459,7 @@ function renderLobby() {
   readyBtn.classList.toggle("readyOn", myReady);
 
   const seatsCount = (update.players || []).length + (update.bots || []).length;
-  const allReady = (update.players || []).length > 0 &&
-    (update.players || []).every(p => p.ready);
-  startBtn.disabled = !(
-    isHost &&
-    mapDef.players.includes(seatsCount) &&
-    allReady
-  );
+  startBtn.disabled = !isHost || !mapDef.players.includes(seatsCount);
 }
 
 function renderSeatDraft(update) {
@@ -689,6 +694,20 @@ export function initLobby(callbacks) {
   });
 
   el("startBtn").addEventListener("click", () => {
+    if (!resumeLobby) {
+      const notReady = (lastUpdate?.players || []).filter(player => !player.ready);
+      if (notReady.length > 0) {
+        const key = notReady.length === 1 ? "playerNotReadyNotice" : "playersNotReadyNotice";
+        const text = t(key).replace("{players}", notReady.map(player => player.name).join(", "));
+        el("lobbyStatus").textContent = text;
+        clearTimeout(lobbyStatusTimer);
+        lobbyStatusTimer = setTimeout(() => {
+          if (el("lobbyStatus").textContent === text) el("lobbyStatus").textContent = "";
+          lobbyStatusTimer = null;
+        }, 4000);
+        return;
+      }
+    }
     sendMessage({ type: resumeLobby ? "startResumeGame" : "startGame" });
   });
 

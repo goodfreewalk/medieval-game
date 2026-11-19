@@ -107,7 +107,7 @@ function updateDisconnectWait() {
 function startDisconnectWait(playerId, waitUntil) {
   clearDisconnectWait();
   disconnectWaitPlayer = playerId;
-  disconnectWaitUntil = waitUntil || Date.now() + 60000;
+  disconnectWaitUntil = waitUntil || Date.now() + 30000;
   updateDisconnectWait();
   disconnectWaitTimer = setInterval(updateDisconnectWait, 1000);
 }
@@ -134,9 +134,7 @@ const pendingEliminations = new Set();
 
 // Данные резюма, ждущие fullState
 let pendingResume = null;
-
-let goldSentFeedback = null;
-let goldSentFeedbackTimer = null;
+let playerReplacedTimer = null;
 
 // Защита от случайного выхода: второе нажатие в течение 3 секунд
 let leaveArmed = false;
@@ -413,17 +411,17 @@ function updateRecruitPanel() {
   if (allyHelp) {
     const row = document.createElement("div");
     row.className = "goldHelpRow";
-    const feedbackVisible = goldSentFeedback &&
-      goldSentFeedback.owner === owner &&
-      goldSentFeedback.x === tile.x &&
-      goldSentFeedback.y === tile.y;
 
     for (const amount of [10, 20]) {
       const button = document.createElement("button");
-      const sent = feedbackVisible && goldSentFeedback.amount === amount;
-      button.className = "recruitButton" + (sent ? " sent" : "");
-      button.textContent = (sent ? "✓ " : "") + t("sendGold").replace("{amount}", amount);
-      button.disabled = feedbackVisible || getPlayerGold(me) < amount;
+      button.className = "recruitButton";
+      button.textContent = t("sendGold").replace("{amount}", amount);
+      button.disabled = getPlayerGold(me) < amount;
+      const releasePress = () => button.classList.remove("pressed");
+      button.addEventListener("pointerdown", () => button.classList.add("pressed"));
+      button.addEventListener("pointerup", releasePress);
+      button.addEventListener("pointercancel", releasePress);
+      button.addEventListener("pointerleave", releasePress);
       button.addEventListener("click", () => {
         const action = {
           kind: "sendGold",
@@ -432,15 +430,7 @@ function updateRecruitPanel() {
           y: tile.y,
           amount
         };
-        if (!runAction(action)) return;
-        sendAction(action);
-        goldSentFeedback = { owner, x: tile.x, y: tile.y, amount };
-        clearTimeout(goldSentFeedbackTimer);
-        updateRecruitPanel();
-        goldSentFeedbackTimer = setTimeout(() => {
-          goldSentFeedback = null;
-          updateRecruitPanel();
-        }, 500);
+        if (runAction(action)) sendAction(action);
       });
       row.appendChild(button);
     }
@@ -1362,7 +1352,13 @@ onNetworkMessage((message) => {
         state.seatKinds[seat.id] = seat.kind || "human";
       }
     }
-    setNetStatus(t("playerReplacedNotice").replace("{player}", message.playerId));
+    const notice = t("playerReplacedNotice").replace("{player}", message.playerId);
+    setNetStatus(notice);
+    clearTimeout(playerReplacedTimer);
+    playerReplacedTimer = setTimeout(() => {
+      if (netStatus.textContent === notice) setNetStatus("");
+      playerReplacedTimer = null;
+    }, 8000);
     refreshGame();
   } else if (message.type === "playerEliminated") {
     clearDisconnectWait(message.playerId);
