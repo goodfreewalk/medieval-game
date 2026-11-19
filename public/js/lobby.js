@@ -15,6 +15,7 @@ let resumeLobby = false;
 let myReady = false;
 let lastUpdate = null;
 let onGameStartCb = null;
+let lobbyStatusTimer = null;
 
 const pendingSpectatorCards = new Map();
 
@@ -448,13 +449,7 @@ function renderLobby() {
   readyBtn.classList.toggle("readyOn", myReady);
 
   const seatsCount = (update.players || []).length + (update.bots || []).length;
-  const allReady = (update.players || []).length > 0 &&
-    (update.players || []).every(p => p.ready);
-  startBtn.disabled = !(
-    isHost &&
-    mapDef.players.includes(seatsCount) &&
-    allReady
-  );
+  startBtn.disabled = !isHost || !mapDef.players.includes(seatsCount);
 }
 
 function renderSeatDraft(update) {
@@ -689,6 +684,20 @@ export function initLobby(callbacks) {
   });
 
   el("startBtn").addEventListener("click", () => {
+    if (!resumeLobby) {
+      const notReady = (lastUpdate?.players || []).filter(player => !player.ready);
+      if (notReady.length > 0) {
+        const key = notReady.length === 1 ? "playerNotReadyNotice" : "playersNotReadyNotice";
+        const text = t(key).replace("{players}", notReady.map(player => player.name).join(", "));
+        el("lobbyStatus").textContent = text;
+        clearTimeout(lobbyStatusTimer);
+        lobbyStatusTimer = setTimeout(() => {
+          if (el("lobbyStatus").textContent === text) el("lobbyStatus").textContent = "";
+          lobbyStatusTimer = null;
+        }, 4000);
+        return;
+      }
+    }
     sendMessage({ type: resumeLobby ? "startResumeGame" : "startGame" });
   });
 

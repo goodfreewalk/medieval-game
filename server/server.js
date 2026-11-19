@@ -38,7 +38,7 @@ const AUTO_TURN_DELAY_MS = 4000;
 const BOT_FIRST_STEP_MS = 900;
 const BOT_STEP_DELAY_MS = 500;
 const BOT_MAX_STEPS = 40;
-const RECONNECT_GRACE_MS = 60000;
+const RECONNECT_GRACE_MS = 30000;
 const TURN_TIME_MS = 60000;
 
 // Допустимые типы игровых действий от клиента
