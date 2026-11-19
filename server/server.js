@@ -898,17 +898,36 @@ wss.on("connection", (ws) => {
       const seatId = message.seatId;
       const maxSeats = mapMaxSeats(room);
       if (!Number.isInteger(seatId) || seatId < 2 || seatId > maxSeats) return;
-      if (room.players.some(p => p.id === seatId)) return; // место занято человеком
 
       const kind = message.kind; // "bot" | "spectator" | "none"
+      if (kind !== "bot" && kind !== "spectator" && kind !== "none") return;
+      const occupant = room.players.find(player => player.id === seatId);
+      const spec = kind === "spectator"
+        ? (room.spectators || []).find(s => s.id === message.spectatorId)
+        : null;
+      if (kind === "spectator" && !spec) return;
+      if (occupant && room.spectators.length >= MAX_SPECTATORS) return;
+
       room.lobbyBots = room.lobbyBots.filter(b => b.id !== seatId);
+      if (occupant) {
+        room.players = room.players.filter(player => player !== occupant);
+        const spectatorId = room.nextSpectatorId++;
+        room.spectators.push({ ws: occupant.ws, id: spectatorId, name: occupant.name });
+        occupant.ws.playerId = null;
+        occupant.ws.spectatorId = spectatorId;
+        sendTo(occupant.ws, {
+          type: "roomJoined",
+          roomCode: room.code,
+          playerId: null,
+          spectatorId,
+          mapId: room.mapId
+        });
+      }
 
       if (kind === "bot") {
         const personality = message.personality === "aggressive" ? "aggressive" : "balanced";
         room.lobbyBots.push({ id: seatId, personality });
       } else if (kind === "spectator") {
-        const spec = (room.spectators || []).find(s => s.id === message.spectatorId);
-        if (!spec) return;
         room.spectators = room.spectators.filter(s => s !== spec);
         room.players.push({ ws: spec.ws, id: seatId, name: spec.name, ready: false, hasState: false });
         spec.ws.playerId = seatId;
@@ -916,6 +935,7 @@ wss.on("connection", (ws) => {
         sendTo(spec.ws, { type: "roomJoined", roomCode: spec.ws.roomCode, playerId: seatId, mapId: room.mapId });
       }
 
+      normalizeLobbyColors(room);
       sendRoomUpdate(room);
       console.log(`Место ${seatId} в комнате ${ws.roomCode}: ${kind}`);
       return;

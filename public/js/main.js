@@ -417,6 +417,11 @@ function updateRecruitPanel() {
       button.className = "recruitButton";
       button.textContent = t("sendGold").replace("{amount}", amount);
       button.disabled = getPlayerGold(me) < amount;
+      const releasePress = () => button.classList.remove("pressed");
+      button.addEventListener("pointerdown", () => button.classList.add("pressed"));
+      button.addEventListener("pointerup", releasePress);
+      button.addEventListener("pointercancel", releasePress);
+      button.addEventListener("pointerleave", releasePress);
       button.addEventListener("click", () => {
         const action = {
           kind: "sendGold",

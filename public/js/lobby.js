@@ -330,7 +330,7 @@ function renderLobby() {
       label.textContent = `${t("seatLabel")} ${seatId}: `;
       li.appendChild(label);
 
-      if (human) {
+      if (human && (!isHost || seatId === 1)) {
         const span = document.createElement("span");
         const mark = human.id === myPlayerId ? ` ${t("you")}` : "";
         span.textContent = `${human.name}${mark} — ` +
@@ -339,7 +339,14 @@ function renderLobby() {
       } else if (isHost) {
         const select = document.createElement("select");
 
-        const opts = [{ value: "none", text: t("seatNone") }];
+        const opts = [];
+        if (human) {
+          opts.push({
+            value: `human:${human.id}`,
+            text: `${human.name} — ${human.ready ? t("readyMark") : t("notReadyMark")}`
+          });
+        }
+        opts.push({ value: "none", text: t("seatNone") });
         opts.push({ value: "bot:balanced", text: t("botBalanced") });
         opts.push({ value: "bot:aggressive", text: t("botAggressive") });
         for (const spec of update.spectators || []) {
@@ -356,10 +363,13 @@ function renderLobby() {
           select.appendChild(op);
         }
 
-        select.value = bot ? `bot:${bot.personality || "balanced"}` : "none";
+        select.value = human
+          ? `human:${human.id}`
+          : bot ? `bot:${bot.personality || "balanced"}` : "none";
 
         select.addEventListener("change", () => {
           const [kind, arg] = select.value.split(":");
+          if (kind === "human") return;
           sendMessage({
             type: "setLobbySeat",
             seatId,
