@@ -788,3 +788,48 @@ select:focus {
   gap: 8px;
   width: 100%;
 }
+
+/* B1: крупнее шрифт в лобби; только #lobbyScreen, меню и игру не затрагивает */
+#lobbyScreen #lobbyTitle {
+  font-size: 36px;
+}
+
+#lobbyScreen #roomCodeDisplay {
+  font-size: 22px;
+}
+
+#lobbyScreen #playersLabel {
+  font-size: 16px;
+}
+
+#lobbyScreen #playerList li {
+  font-size: 16px;
+}
+
+#lobbyScreen #playerList select {
+  font-size: 15px;
+}
+
+#lobbyScreen #mapInfo {
+  font-size: 15px;
+}
+
+#lobbyScreen #mapSelect {
+  font-size: 16px;
+}
+
+#lobbyScreen button {
+  font-size: 17px;
+}
+
+#lobbyScreen #lobbyStatus {
+  font-size: 15px;
+}
+
+#lobbyScreen .guestRequestCard {
+  font-size: 15px;
+}
+
+#lobbyScreen .guestRequestRow button {
+  font-size: 14px;
+}
