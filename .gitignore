@@ -6,3 +6,6 @@ npm-debug.log*
 Thumbs.db
 desktop.ini
 .env
+.qwen/
+.playwright-mcp/
+notes/
