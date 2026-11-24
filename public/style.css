@@ -349,8 +349,8 @@ select:focus {
 
 #gameContainer {
   position: absolute;
-  /* B20: нижние 4px отданы полоске очереди — карта и полоска не перекрываются */
-  inset: 0 0 4px 0;
+  /* B20/B24: нижние 6px отданы полоске очереди — карта и полоска не перекрываются */
+  inset: 0 0 6px 0;
   overflow: hidden;
   cursor: grab;
 }
@@ -845,7 +845,7 @@ select:focus {
   z-index: 8;
   display: flex;
   align-items: stretch;
-  height: 4px;
+  height: 6px;
   pointer-events: none;
 }
 
@@ -853,8 +853,17 @@ select:focus {
   flex: 1 1 0;
   min-width: 0;
   filter: brightness(1.25) saturate(1.35);
-  /* B23: hover-подсказка чей ход; клики по 4px полоске не нужны */
+  /* B23: hover-подсказка чей ход; клики по полоске не нужны */
   pointer-events: auto;
+}
+
+/* B24: скруглённые концы непрерывной полоски */
+.turnQueueSeg:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.turnQueueSeg:last-child {
+  border-radius: 0 3px 3px 0;
 }
 
 .turnQueueSeg.current {

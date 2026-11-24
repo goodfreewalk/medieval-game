@@ -883,8 +883,8 @@ function layoutGameScreen() {
   gameScreen.style.overflow = "hidden";
 
   gameContainer.style.position = "absolute";
-  // B20: нижние 4px отданы полоске очереди (иначе inline-стиль перебивает CSS)
-  gameContainer.style.inset = "0 0 4px 0";
+  // B20/B24: нижние 6px отданы полоске очереди (иначе inline-стиль перебивает CSS)
+  gameContainer.style.inset = "0 0 6px 0";
   gameContainer.style.width = "auto";
   gameContainer.style.height = "auto";
   gameContainer.style.margin = "0";
