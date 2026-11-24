@@ -834,28 +834,29 @@ select:focus {
   font-size: 14px;
 }
 
-/* B8/B18: очередь ходов — непрерывная цветная полоска без надписей */
+/* B8/B18/B19: очередь ходов — тонкая яркая непрерывная полоска без надписей */
 #turnQueue {
   display: flex;
   align-items: stretch;
-  height: 8px;
-  margin-top: 8px;
+  height: 4px;
+  margin-top: 6px;
   pointer-events: none;
 }
 
 .turnQueueSeg {
   flex: 1 1 0;
   min-width: 0;
+  filter: brightness(1.25) saturate(1.35);
 }
 
 .turnQueueSeg:first-child {
-  border-radius: 4px 0 0 4px;
+  border-radius: 2px 0 0 2px;
 }
 
 .turnQueueSeg:last-child {
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 2px 2px 0;
 }
 
 .turnQueueSeg.current {
-  filter: brightness(1.45);
+  filter: brightness(1.7) saturate(1.4);
 }

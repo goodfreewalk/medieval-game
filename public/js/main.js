@@ -269,7 +269,7 @@ function updateTurnQueue() {
     seg.style.background = color;
 
     if (id === state.currentPlayer) {
-      seg.style.boxShadow = `0 0 8px 2px ${color}`;
+      seg.style.boxShadow = `0 0 10px 3px ${color}`;
     }
 
     turnQueue.appendChild(seg);
