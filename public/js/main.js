@@ -18,7 +18,8 @@ import {
 } from "./i18n.js";
 import {
   getUnitAtTile,
-  UNIT_TYPES
+  UNIT_TYPES,
+  getPlayerColor
 } from "./units.js";
 import { TERRAIN, TERRAIN_DEFENSE, TERRAIN_COST } from "./terrain.js";
 import { drawGame } from "./render.js";
@@ -57,6 +58,7 @@ const ctx = canvas.getContext("2d");
 const infoBox = document.getElementById("infoBox");
 const info = document.getElementById("info");
 const turnInfo = document.getElementById("turnInfo");
+const turnQueue = document.getElementById("turnQueue");
 const timerElement = document.getElementById("timer");
 const endTurnButton = document.getElementById("endTurn");
 const saveGameBtn = document.getElementById("saveGameBtn");
@@ -231,6 +233,51 @@ function updateTurnInfo() {
   }
 
   endTurnButton.disabled = !canPlayTurn();
+  updateTurnQueue();
+}
+
+// B8: очередь ходов — тот же порядок, что считает getNextPlayer в logic.js:
+// места по возрастанию, устранённые пропускаются, цикл от текущего игрока
+function updateTurnQueue() {
+  turnQueue.innerHTML = "";
+
+  if (!state.map || state.gameOver) {
+    return;
+  }
+
+  const ids = Object.keys(state.players)
+    .map(Number)
+    .filter(id => !state.eliminated.has(id))
+    .sort((a, b) => a - b);
+
+  if (ids.length === 0) {
+    return;
+  }
+
+  const start = ids.indexOf(state.currentPlayer);
+  const order = start === -1 ? ids : ids.slice(start).concat(ids.slice(0, start));
+
+  const label = document.createElement("span");
+  label.className = "turnQueueLabel";
+  label.textContent = t("turnQueue");
+  turnQueue.appendChild(label);
+
+  for (const id of order) {
+    const chip = document.createElement("span");
+    chip.className = "turnQueueChip" + (id === state.currentPlayer ? " current" : "");
+
+    const dot = document.createElement("span");
+    dot.className = "turnQueueDot";
+    dot.style.background = getPlayerColor(id, state.playerColors);
+    chip.appendChild(dot);
+
+    const name = document.createElement("span");
+    name.className = "turnQueueName";
+    name.textContent = state.players[id]?.name || `${t("seatLabel")} ${id}`;
+    chip.appendChild(name);
+
+    turnQueue.appendChild(chip);
+  }
 }
 
 function updateTimerDisplay() {
@@ -1178,7 +1225,15 @@ canvas.addEventListener("click", (event) => {
 
   const tile = screenToTile(event);
 
+  // B7: клик мимо карты (море) снимает выделение юнита/клетки
   if (!tile) {
+    state.selectedUnit = null;
+    state.selectedTile = null;
+    state.reachableTiles = new Map();
+    state.attackableTiles = new Map();
+    hideInfo();
+    updateRecruitPanel();
+    drawGame();
     return;
   }
 
@@ -1245,10 +1300,28 @@ canvas.addEventListener("click", (event) => {
     }
   }
 
+  const terrain = state.map[tile.y][tile.x];
+
+  // Здания без юнита: выделение клетки и окно найма, как прежде
+  if (terrain === TERRAIN.CASTLE || terrain === TERRAIN.VILLAGE) {
+    state.selectedUnit = null;
+    state.selectedTile = tile;
+    updateSelectionHighlights();
+    updateInfo();
+    updateRecruitPanel();
+    drawGame();
+    return;
+  }
+
+  // B7: клик по пустой клетке снимает выделение;
+  // подсказка местности всплывает на 4 с и не держит выделение
   state.selectedUnit = null;
   state.selectedTile = tile;
   updateSelectionHighlights();
   updateInfo();
+  state.selectedTile = null;
+  state.reachableTiles = new Map();
+  state.attackableTiles = new Map();
   updateRecruitPanel();
   drawGame();
 });
