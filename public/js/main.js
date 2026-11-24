@@ -574,6 +574,12 @@ function detectEliminations() {
 }
 
 function refreshGame() {
+  // Вызовы до fullState (resume/rejoin/gameStart): карты ещё нет —
+  // updateResources/getOwnedTerritories упадут на null, обновлять нечего
+  if (!state.map) {
+    return;
+  }
+
   updateTurnInfo();
   resourcesElement.style.display = getMyPlayerId() ? "" : "none";
   updateResources();
