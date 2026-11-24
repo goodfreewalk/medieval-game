@@ -268,6 +268,11 @@ function updateTurnQueue() {
     const color = getPlayerColor(id, state.playerColors);
     seg.style.background = color;
 
+    // B23: подсказка при наведении — чей это ход
+    seg.title = id === state.currentPlayer
+      ? `${t("seatLabel")} ${id} — ${t("turnQueueCurrent")}`
+      : `${t("seatLabel")} ${id}`;
+
     if (id === state.currentPlayer) {
       seg.style.boxShadow = `0 0 10px 3px ${color}`;
     }
@@ -878,7 +883,8 @@ function layoutGameScreen() {
   gameScreen.style.overflow = "hidden";
 
   gameContainer.style.position = "absolute";
-  gameContainer.style.inset = "0";
+  // B20: нижние 4px отданы полоске очереди (иначе inline-стиль перебивает CSS)
+  gameContainer.style.inset = "0 0 4px 0";
   gameContainer.style.width = "auto";
   gameContainer.style.height = "auto";
   gameContainer.style.margin = "0";
