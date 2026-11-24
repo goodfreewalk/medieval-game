@@ -349,7 +349,8 @@ select:focus {
 
 #gameContainer {
   position: absolute;
-  inset: 0;
+  /* B20: нижние 4px отданы полоске очереди — карта и полоска не перекрываются */
+  inset: 0 0 4px 0;
   overflow: hidden;
   cursor: grab;
 }

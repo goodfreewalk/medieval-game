@@ -321,13 +321,16 @@ function drawFrame() {
       }
     }
 
-    // Здоровье под кругом (обычный текст: цифры дёшевы)
-    ctx.font = `bold ${T * 0.17}px sans-serif`;
-    ctx.lineWidth = T * 0.05;
-    ctx.strokeStyle = "rgba(0, 0, 0, 0.75)";
-    ctx.strokeText(String(unit.hp), cx, cy + T * 0.42);
-    ctx.fillStyle = "#ffffff";
-    ctx.fillText(String(unit.hp), cx, cy + T * 0.42);
+    // B21: прогресс-бар здоровья вместо цифр
+    const bw = T * 0.62;
+    const bh = Math.max(2, T * 0.09);
+    const bx = cx - bw / 2;
+    const by = cy + T * 0.34;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+    const frac = Math.max(0, Math.min(1, unit.hp / 100));
+    ctx.fillStyle = frac > 0.5 ? "#3dbb4a" : frac > 0.25 ? "#e6c229" : "#e5484d";
+    ctx.fillRect(bx, by, bw * frac, bh);
 
     ctx.globalAlpha = 1;
   }
