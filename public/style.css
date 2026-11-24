@@ -833,3 +833,50 @@ select:focus {
 #lobbyScreen .guestRequestRow button {
   font-size: 14px;
 }
+
+/* B8: очередь ходов под строкой хода */
+#turnQueue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  pointer-events: none;
+}
+
+.turnQueueLabel {
+  font-size: 12px;
+  color: #9aa3ad;
+}
+
+.turnQueueChip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(20, 20, 30, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  color: #cfcfd6;
+}
+
+.turnQueueChip.current {
+  border-color: rgba(255, 255, 255, 0.85);
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.turnQueueDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.turnQueueName {
+  max-width: 110px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

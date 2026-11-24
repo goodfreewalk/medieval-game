@@ -69,6 +69,7 @@ const translations = {
     // ФИКС: ключи, которых не хватало (использовались в main.js)
     turn: "Ход",
     yourTurn: "Твой ход",
+    turnQueue: "Очередь ходов",
     victory: "Победа!",
     defeat: "Поражение",
     connectionLost: "Соединение с сервером потеряно. Обновите страницу.",
@@ -237,6 +238,7 @@ const translations = {
     // FIX: keys used in main.js were missing
     turn: "Turn",
     yourTurn: "Your turn",
+    turnQueue: "Turn order",
     victory: "Victory!",
     defeat: "Defeat",
     connectionLost: "Connection to the server lost. Please reload the page.",
