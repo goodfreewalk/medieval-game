@@ -236,8 +236,10 @@ function updateTurnInfo() {
   updateTurnQueue();
 }
 
-// B8: очередь ходов — тот же порядок, что считает getNextPlayer в logic.js:
-// места по возрастанию, устранённые пропускаются, цикл от текущего игрока
+// B8/B18: очередь ходов — узкая непрерывная полоска цветов игроков без надписей.
+// Порядок тот же, что считает getNextPlayer в logic.js:
+// места по возрастанию, устранённые пропускаются, цикл от текущего игрока.
+// Сегмент текущего хода светится подсветкой своего цвета.
 function updateTurnQueue() {
   turnQueue.innerHTML = "";
 
@@ -257,26 +259,20 @@ function updateTurnQueue() {
   const start = ids.indexOf(state.currentPlayer);
   const order = start === -1 ? ids : ids.slice(start).concat(ids.slice(0, start));
 
-  const label = document.createElement("span");
-  label.className = "turnQueueLabel";
-  label.textContent = t("turnQueue");
-  turnQueue.appendChild(label);
+  turnQueue.setAttribute("aria-label", t("turnQueue"));
 
   for (const id of order) {
-    const chip = document.createElement("span");
-    chip.className = "turnQueueChip" + (id === state.currentPlayer ? " current" : "");
+    const seg = document.createElement("span");
+    seg.className = "turnQueueSeg" + (id === state.currentPlayer ? " current" : "");
 
-    const dot = document.createElement("span");
-    dot.className = "turnQueueDot";
-    dot.style.background = getPlayerColor(id, state.playerColors);
-    chip.appendChild(dot);
+    const color = getPlayerColor(id, state.playerColors);
+    seg.style.background = color;
 
-    const name = document.createElement("span");
-    name.className = "turnQueueName";
-    name.textContent = state.players[id]?.name || `${t("seatLabel")} ${id}`;
-    chip.appendChild(name);
+    if (id === state.currentPlayer) {
+      seg.style.boxShadow = `0 0 8px 2px ${color}`;
+    }
 
-    turnQueue.appendChild(chip);
+    turnQueue.appendChild(seg);
   }
 }
 
