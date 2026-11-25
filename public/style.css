@@ -364,6 +364,7 @@ select:focus {
   left: 0;
   top: 0;
   display: block;
+  image-rendering: pixelated;
 }
 
 /* ----- HUD: ресурсы / управление -----

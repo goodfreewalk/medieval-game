@@ -22,7 +22,7 @@ import {
   getPlayerColor
 } from "./units.js";
 import { TERRAIN, TERRAIN_DEFENSE, TERRAIN_COST } from "./terrain.js";
-import { drawGame } from "./render.js";
+import { drawGame, notifyAttack } from "./render.js";
 import { computeChecksum } from "./checksum.js";
 import { showScreen } from "./screens.js";
 import {
@@ -787,6 +787,8 @@ function runAction(action) {
     const result = applyAttack(action.attackerId, action.targetId);
 
     if (result.success) {
+      // attack-кадр спрайта — клиентский таймер, и для своих, и для чужих атак
+      notifyAttack(action.attackerId);
       const attackerAlive = state.units.some(
         unit => unit.id === action.attackerId
       );

@@ -1,0 +1,28 @@
+{
+  "tile": 64,
+  "terrain": {
+    "grass": "terrain-grass.png",
+    "forest": "terrain-forest.png",
+    "hills": "terrain-hills.png",
+    "water": "terrain-water.png",
+    "mountain": "terrain-mountain.png"
+  },
+  "props": {
+    "castle": "prop-castle.png",
+    "banner": "prop-banner.png"
+  },
+  "units": {
+    "frames": [
+      "walkA",
+      "walkB",
+      "attack"
+    ],
+    "archer": "unit-archer"
+  },
+  "footprint": 1,
+  "unitFrames": {
+    "archer": [
+      "attack"
+    ]
+  }
+}

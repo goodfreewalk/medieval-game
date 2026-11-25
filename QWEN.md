@@ -68,6 +68,26 @@ units,terrain,maps,checksum,build}.js импортируются И клиент
 - Запреты прежние: force-push, rm -rf, майнинг/GPU, клон Kimi, saves/ в git, прямые правки файлов на VPS; прод-таймер отключён.
 - Ручной deploy-prod.bat остаётся запасным путём владельца.
 
+## Графика и ассеты через агента (и 3D потом)
+- Владелец описывает словами → агент генерирует ассеты локально
+  (scripts/gen-assets.mjs: бесплатный pollinations по умолчанию, retry 3/таймаут;
+  DASHSCOPE_API_KEY / OPENROUTER_API_KEY только из env переключают на платных)
+  или берёт готовые с диска. Вложения в чат не требуются никогда;
+  ассеты только на диске и в git.
+- Пайплайн: public/assets/raw/ → scripts/build-manifest.mjs (chroma-key = цвет
+  из угла ±10 + despill, даунскейл tile:64 area-average) → public/assets/sprites/
+  + manifest.json → клиентский рендер public/js/render/* (integer-scale 2x/3x,
+  smoothing off, бесшовные края, замок/деревня/юниты = 1 клетка, эллипс-тени,
+  горизонтальный flip, walk/attack — клиентские таймеры; старый рендер за
+  флагом ?renderer=legacy до приёмки).
+- Целевой стиль и правила: notes/art-style.md. Самотесты: npm run check,
+  node --check изменённых, Playwright http://localhost:8090, скрины до/после в notes/.
+- Фаза 1 заканчивается «Локально готово: смотри http://localhost:8090» + список
+  изменений + скрины; деплой НЕ делать. Фазы 2/3 — только по фразам владельца
+  «ДЕПЛОЙ ТЕСТ» / «ПРИНИМАЮ ПРОД».
+- 3D потом: public/assets/models/ + scripts/gen-models.mjs (Meshy/Tripo/Rodin
+  по env-ключам, .glb + manifest) + three.js-рендер; тот же регламент подтверждений.
+
 ## Git-транспорт изменений (обязательно)
 - Единственный путь изменений: commit → push ветки → merge в test/main → git pull на сервере (fetch + merge --ff-only) + pm2 restart.
 - Деплой-скрипты ОБЯЗАНЫ abort при грязном дереве или чужой ветке на сервере; test-каталог = ветка test, прод-каталог = ветка main.
