@@ -27,6 +27,14 @@ const TERRAIN_IDS = ["grass", "forest", "hills", "water", "mountain"];
 const PROP_IDS = ["castle", "village", "banner", "gold"];
 const FRAMES = ["walkA", "walkB", "attack"];
 
+// Брак бесплатного провайдера, не лечится кейингом (см. отчёт о качестве):
+// castle — «призрачный» рендер, стены растворены в фоне. Перегенерировать
+// с ключевым провайдером и убрать из списка.
+const SKIP_IDS = new Set(["prop-castle"]);
+// спрайт, у которого фон не отделился (провайдер дал розовый-на-розовом),
+// в манифест не берём: лучше фолбэк-круг, чем розовый квадрат на карте
+const MIN_TRANSPARENT = 0.25;
+
 // Бесплатный провайдер рисует водяной знак в правом нижнем углу даже с
 // nologo=true. Вырезаем детерминированно: тайлы — зеркальным блоком из
 // левого верхнего угла, спрайты — цветом угла (уйдёт в chroma-key).
@@ -70,16 +78,21 @@ function chromaKey(img, isTile) {
     );
   };
 
-  // фон-подобный: нейтральный (серый/белый градиент) или magenta;
-  // насыщенный контент (фиолетовый/розовый/золото).fill не пропускает
+  // Фон-подобный: нейтральный (белый/серый градиент, max-min <= 30) или
+  // magenta. Fill шагом ±10 + прыжки нейтраль→нейтраль (серая рамка →
+  // белый интерьер); насыщенный контент (розовый/фиолетовый/золото)
+  // не фон-подобный и не трогается. Проверено смоуком на :8090.
   const neutral = (i) => {
     const d = i * 4;
     return Math.max(data[d], data[d + 1], data[d + 2]) -
       Math.min(data[d], data[d + 1], data[d + 2]) <= 30;
   };
+  // magenta-фон провайдера — СВЕТлый розовый градиент; тёмная magenta-броня
+  // юнита того же оттенка, но min-канал низкий → контент не трогаем
   const magenta = (i) => {
     const d = i * 4;
-    return data[d] > 180 && data[d + 2] > 180 && data[d + 1] < 140;
+    const r = data[d], g = data[d + 1], b = data[d + 2];
+    return r > 150 && b > 150 && g < r - 30 && Math.min(r, g, b) >= 100;
   };
   const bgLike = (i) => neutral(i) || magenta(i);
 
@@ -102,8 +115,6 @@ function chromaKey(img, isTile) {
     if (y + 1 < height) nb.push(i + width);
     if (y > 0) nb.push(i - width);
     for (const j of nb) {
-      // шаг по градиенту ±10 ИЛИ прыжок нейтраль→нейтраль (белый↔серый),
-      // но никогда внутрь насыщенного контента
       if (!seen[j] && bgLike(j) && (diff(i, j) <= TOL || (neutral(i) && neutral(j)))) {
         seen[j] = 1;
         alpha[j] = 0;
@@ -262,10 +273,39 @@ function main() {
       console.log(`[skip] ${id} (нет raw)`);
       return false;
     }
+    if (SKIP_IDS.has(id)) {
+      console.log(`[defect] ${id} (брак провайдера, пропущен; перегенерировать)`);
+      return false;
+    }
     let img = decodePNG(fs.readFileSync(src));
     deWatermark(img, isTile);
     chromaKey(img, isTile);
     if (isTile) img = trimLetterbox(img);
+    // gate контента: спрайт, потерявший центр после кейинга (провайдер
+    // «растворил» арт в фоне), в манифест не берём — рендер уйдёт в фолбэк
+    if (!isTile) {
+      let clear = 0;
+      for (let i = 3; i < img.data.length; i += 4) {
+        if (img.data[i] < 128) clear++;
+      }
+      if (clear / (img.width * img.height) < MIN_TRANSPARENT) {
+        console.log(`[defect] ${id} (фон не отделился, пропущен; перегенерировать)`);
+        return false;
+      }
+      let opaque = 0, total = 0;
+      const x0 = img.width >> 2, x1 = img.width - (img.width >> 2);
+      const y0 = img.height >> 2, y1 = img.height - (img.height >> 2);
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          total++;
+          if (img.data[(y * img.width + x) * 4 + 3] > 128) opaque++;
+        }
+      }
+      if (opaque / total < 0.2) {
+        console.log(`[defect] ${id} (контент потерян при кейинге, пропущен)`);
+        return false;
+      }
+    }
     const small = downscale(img, TILE);
     if (isTile) seamless(small);
     fs.writeFileSync(path.join(OUT_DIR, `${id}.png`), encodePNG(TILE, TILE, small.data));
