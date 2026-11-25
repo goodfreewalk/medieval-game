@@ -8,7 +8,6 @@
     "mountain": "terrain-mountain.png"
   },
   "props": {
-    "village": "prop-village.png",
     "banner": "prop-banner.png"
   },
   "units": {
