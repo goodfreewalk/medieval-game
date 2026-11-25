@@ -8,7 +8,7 @@
     "mountain": "terrain-mountain.png"
   },
   "props": {
-    "castle": "prop-castle.png",
+    "village": "prop-village.png",
     "banner": "prop-banner.png"
   },
   "units": {
@@ -17,11 +17,23 @@
       "walkB",
       "attack"
     ],
-    "archer": "unit-archer"
+    "axe": "unit-axe",
+    "archer": "unit-archer",
+    "knight": "unit-knight",
+    "heavy": "unit-heavy"
   },
   "footprint": 1,
   "unitFrames": {
+    "axe": [
+      "attack"
+    ],
     "archer": [
+      "attack"
+    ],
+    "knight": [
+      "walkB"
+    ],
+    "heavy": [
       "attack"
     ]
   }

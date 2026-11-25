@@ -165,23 +165,27 @@ function chromaKey(img, isTile) {
 // срезаем однородные тёмные/светлые строки и столбцы перед даунскейлом
 function trimLetterbox(img) {
   const { width, height, data } = img;
+  // полоса = ≥90% пикселей строки/столбца тёмные (<60) или светлые (>230):
+  // letterbox провайдера не идеально однороден, порог по большинству
   const rowUniform = (y) => {
-    let mn = 255, mx = 0;
+    let dark = 0, light = 0;
     for (let x = 0; x < width; x++) {
       const d = (y * width + x) * 4;
       const l = (data[d] + data[d + 1] + data[d + 2]) / 3;
-      mn = Math.min(mn, l); mx = Math.max(mx, l);
+      if (l < 60) dark++;
+      if (l > 230) light++;
     }
-    return mx - mn <= 12 && (mx < 40 || mn > 230);
+    return dark >= width * 0.9 || light >= width * 0.9;
   };
   const colUniform = (x) => {
-    let mn = 255, mx = 0;
+    let dark = 0, light = 0;
     for (let y = 0; y < height; y++) {
       const d = (y * width + x) * 4;
       const l = (data[d] + data[d + 1] + data[d + 2]) / 3;
-      mn = Math.min(mn, l); mx = Math.max(mx, l);
+      if (l < 60) dark++;
+      if (l > 230) light++;
     }
-    return mx - mn <= 12 && (mx < 40 || mn > 230);
+    return dark >= height * 0.9 || light >= height * 0.9;
   };
   let top = 0, bottom = height, left = 0, right = width;
   while (top < bottom - 8 && rowUniform(top)) top++;
